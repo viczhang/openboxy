@@ -51,7 +51,7 @@ For headless clients or manual config:
 ```json
 {
   "mcpServers": {
-    "openboxy": {
+    "boxy": {
       "serverUrl": "https://your-domain/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_OPENBOXY_MCP_TOKEN"
@@ -66,7 +66,7 @@ For **OpenCode** (`~/.config/opencode/opencode.jsonc`) with a static token:
 ```jsonc
 {
   "mcp": {
-    "openboxy": {
+    "boxy": {
       "type": "remote",
       "url": "https://your-domain/mcp",
       "enabled": true,

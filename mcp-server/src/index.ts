@@ -495,7 +495,7 @@ function textResult(data: unknown) {
 
 function buildMcpServer(): McpServer {
   const server = new McpServer({
-    name: "openboxy",
+    name: process.env.OPENBOXY_MCP_NAME?.trim() || "boxy",
     version: "1.0.0",
   });
 
