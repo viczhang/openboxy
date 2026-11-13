@@ -5,6 +5,7 @@ import { z } from "zod";
 
 const PORT = Number(process.env.MCP_PORT || 3100);
 const COMPUTER_URL = (process.env.COMPUTER_URL || "http://openboxy:4100").replace(/\/+$/, "");
+const UI_URL = (process.env.OPENBOXY_UI_URL || "http://openboxy:3001").replace(/\/+$/, "");
 const COMPUTER_TOKEN = (process.env.COMPUTER_TOKEN || "").trim();
 const MCP_TOKEN = (process.env.OPENBOXY_MCP_TOKEN || "").trim();
 const DEFAULT_BOT_ID = (process.env.OPENBOXY_BOT_ID || "default").trim();
@@ -805,6 +806,28 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
 
     if (req.method === "GET" && url.pathname === "/health") {
       return Response.json({ status: "ok", service: "openboxy-mcp" });
+    }
+
+    if (req.method === "GET" && url.pathname === "/") {
+      const upstream = await fetch(`${UI_URL}/`, {
+        headers: {
+          host: "localhost:3001",
+          origin: "http://localhost:3001",
+          "accept-encoding": "identity",
+        },
+      });
+      const ct = upstream.headers.get("content-type") || "";
+      if (!upstream.ok || !ct.includes("text/html")) {
+        return upstream;
+      }
+      const html = await upstream.text();
+      const pill = `<div id="openboxy-nav-pill" style="position:fixed;bottom:14px;right:14px;z-index:99999;display:flex;gap:6px;background:rgba(15,23,42,0.92);border:1px solid #334155;border-radius:999px;padding:6px 10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);font-family:system-ui,-apple-system,sans-serif;font-size:12px;"><a href="/view" style="color:#f8fafc;text-decoration:none;font-weight:600;padding:3px 10px;border-radius:999px;background:#2563eb;">Live Browser</a><a href="/view/terminal" style="color:#e2e8f0;text-decoration:none;font-weight:600;padding:3px 10px;border-radius:999px;background:#334155;">Terminal</a></div>`;
+      const patched = html.includes("</body>")
+        ? html.replace("</body>", `${pill}</body>`)
+        : `${html}${pill}`;
+      const headers = new Headers(upstream.headers);
+      headers.delete("content-length");
+      return new Response(patched, { status: upstream.status, headers });
     }
 
     if (req.method === "GET" && url.pathname === "/view") {
