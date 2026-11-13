@@ -121,7 +121,7 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
 </head>
 <body>
   <header>
-    <strong>OpenBoxy</strong>
+    <a href="/" style="color:#f8fafc;text-decoration:none;font-weight:700;">OpenBoxy</a>
     <div class="tabs">
       <button class="tab active" id="tabBrowser" type="button">Browser</button>
       <button class="tab" id="tabTerminal" type="button">Terminal</button>
