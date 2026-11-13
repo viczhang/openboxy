@@ -84,7 +84,7 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-function renderViewPage(): Response {
+function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Response {
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -380,7 +380,8 @@ function renderViewPage(): Response {
     });
 
     refreshBtn.addEventListener("click", refresh);
-    syncControl().then(refresh);
+    setTab(${JSON.stringify(initialTab)});
+    syncControl().then(() => { if (activeTab === "browser") refresh(); });
     setInterval(() => { syncControl(); refresh(); }, 1500);
   </script>
 </body>
@@ -793,10 +794,13 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
     const url = new URL(req.url);
 
     if (url.pathname === "/view/terminal") {
-      if (srv.upgrade(req, { data: { upstream: null, pending: [] } })) {
-        return undefined as unknown as Response;
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        if (srv.upgrade(req, { data: { upstream: null, pending: [] } })) {
+          return undefined as unknown as Response;
+        }
+        return Response.json({ error: "Expected WebSocket upgrade" }, { status: 400 });
       }
-      return Response.json({ error: "Expected WebSocket upgrade" }, { status: 400 });
+      return renderViewPage("terminal");
     }
 
     if (req.method === "GET" && url.pathname === "/health") {
@@ -827,8 +831,9 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
     if (req.method === "POST" && url.pathname === "/view/control/take") {
       type ControlShape = {
         holder?: string;
+        requested?: boolean;
         requestId?: string;
-        request?: { id?: string; requestId?: string };
+        request?: { id?: string; requestId?: string; status?: string };
       };
       const extractId = (c: ControlShape): string | undefined =>
         c.request?.id ?? c.request?.requestId ?? c.requestId;
@@ -837,7 +842,10 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
       if (current.holder === "human") {
         return Response.json(current);
       }
-      let requestId = extractId(current);
+      let requestId =
+        current.requested && current.request?.status === "waiting"
+          ? extractId(current)
+          : undefined;
       if (!requestId) {
         const reqRes = (await callComputer("/control/request", {
           body: { source: "manual", reason: "Owner taking control from /view" },
