@@ -90,11 +90,15 @@ function renderViewPage(): Response {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OpenBoxy Live Browser</title>
+  <title>OpenBoxy Live View</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; flex-direction: column; height: 100vh; }
     header { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: #1e293b; border-bottom: 1px solid #334155; flex-wrap: wrap; }
+    .tabs { display: flex; gap: 4px; background: #0f172a; padding: 3px; border-radius: 8px; border: 1px solid #334155; }
+    .tab { padding: 5px 12px; border-radius: 6px; border: 0; background: transparent; color: #94a3b8; font-weight: 600; cursor: pointer; font-size: 13px; }
+    .tab.active { background: #334155; color: #f8fafc; }
     header form { display: flex; flex: 1; gap: 8px; min-width: 220px; }
     input[type="text"] { flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; }
     button { padding: 8px 14px; border-radius: 8px; border: 0; background: #3b82f6; color: #fff; font-weight: 600; cursor: pointer; font-size: 13px; white-space: nowrap; }
@@ -106,14 +110,21 @@ function renderViewPage(): Response {
     button.release { background: #16a34a; }
     button.release:hover { background: #15803d; }
     .meta { font-size: 12px; color: #94a3b8; white-space: nowrap; }
-    main { flex: 1; display: grid; place-items: center; overflow: auto; padding: 12px; }
+    main { flex: 1; display: grid; place-items: center; overflow: auto; padding: 12px; position: relative; }
     img { max-width: 100%; max-height: calc(100vh - 76px); border: 2px solid #334155; border-radius: 8px; background: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.45); outline: none; }
     img.controlling { border-color: #22c55e; cursor: crosshair; }
+    #termWrap { display: none; width: 100%; height: 100%; background: #020617; border: 2px solid #334155; border-radius: 8px; padding: 8px; overflow: hidden; }
+    #termWrap.controlling { border-color: #22c55e; }
+    #terminal { width: 100%; height: 100%; }
   </style>
 </head>
 <body>
   <header>
-    <strong>OpenBoxy Browser</strong>
+    <strong>OpenBoxy</strong>
+    <div class="tabs">
+      <button class="tab active" id="tabBrowser" type="button">Browser</button>
+      <button class="tab" id="tabTerminal" type="button">Terminal</button>
+    </div>
     <form id="navForm">
       <input id="urlInput" type="text" placeholder="https://example.com" />
       <button type="submit">Go</button>
@@ -124,22 +135,36 @@ function renderViewPage(): Response {
   </header>
   <main>
     <img id="screen" tabindex="0" alt="Live Browser View" />
+    <div id="termWrap"><div id="terminal"></div></div>
   </main>
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
   <script>
     const img = document.getElementById("screen");
+    const termWrap = document.getElementById("termWrap");
+    const termEl = document.getElementById("terminal");
+    const navForm = document.getElementById("navForm");
     const urlInput = document.getElementById("urlInput");
     const controlBtn = document.getElementById("controlBtn");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const tabBrowser = document.getElementById("tabBrowser");
+    const tabTerminal = document.getElementById("tabTerminal");
     const statusEl = document.getElementById("status");
     let busy = false;
     let controlling = false;
+    let activeTab = "browser";
     let scrollTimer = null;
     let pendingScrollY = 0;
+    let term = null;
+    let fitAddon = null;
+    let termWs = null;
 
     function updateControlUi(state) {
       controlling = state && state.holder === "human";
       controlBtn.textContent = controlling ? "Release Control" : "Take Control";
       controlBtn.className = controlling ? "release" : "take";
       img.className = controlling ? "controlling" : "";
+      termWrap.className = controlling ? "controlling" : "";
     }
 
     async function syncControl() {
@@ -150,7 +175,7 @@ function renderViewPage(): Response {
     }
 
     async function refresh() {
-      if (busy) return;
+      if (busy || activeTab !== "browser") return;
       busy = true;
       try {
         const res = await fetch("/view/screenshot");
@@ -167,6 +192,90 @@ function renderViewPage(): Response {
         busy = false;
       }
     }
+
+    function connectTerminal() {
+      if (!window.Terminal) {
+        statusEl.textContent = "xterm.js failed to load";
+        return;
+      }
+      if (!term) {
+        term = new window.Terminal({
+          cursorBlink: true,
+          fontSize: 13,
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+          theme: { background: "#020617", foreground: "#e2e8f0" },
+        });
+        fitAddon = new window.FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(termEl);
+        term.onData((data) => {
+          if (!controlling) {
+            statusEl.textContent = "Click Take Control to type in terminal";
+            return;
+          }
+          if (termWs && termWs.readyState === WebSocket.OPEN) {
+            termWs.send(JSON.stringify({ type: "input", data }));
+          }
+        });
+        window.addEventListener("resize", () => {
+          if (activeTab === "terminal" && fitAddon && termWs && termWs.readyState === WebSocket.OPEN) {
+            fitAddon.fit();
+            termWs.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+          }
+        });
+      }
+      setTimeout(() => {
+        if (fitAddon) fitAddon.fit();
+      }, 20);
+      if (termWs && (termWs.readyState === WebSocket.OPEN || termWs.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      termWs = new WebSocket(proto + "//" + location.host + "/view/terminal");
+      termWs.binaryType = "arraybuffer";
+      termWs.onopen = () => {
+        if (fitAddon) fitAddon.fit();
+        termWs.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        statusEl.textContent = controlling ? "Terminal · Controlling" : "Terminal · Viewing (Take Control to type)";
+      };
+      termWs.onmessage = (e) => {
+        if (typeof e.data === "string") {
+          try {
+            const msg = JSON.parse(e.data);
+            if (msg.type === "snapshot") term.reset();
+            else if (msg.type === "error") term.writeln("\\r\\n[Error: " + msg.message + "]");
+          } catch {}
+          return;
+        }
+        const bytes = new Uint8Array(e.data);
+        term.write(bytes);
+        if (termWs && termWs.readyState === WebSocket.OPEN) {
+          termWs.send(JSON.stringify({ type: "ack", bytes: bytes.byteLength }));
+        }
+      };
+      termWs.onclose = () => {
+        statusEl.textContent = "Terminal disconnected";
+      };
+    }
+
+    function setTab(tab) {
+      activeTab = tab;
+      tabBrowser.className = tab === "browser" ? "tab active" : "tab";
+      tabTerminal.className = tab === "terminal" ? "tab active" : "tab";
+      img.style.display = tab === "browser" ? "block" : "none";
+      navForm.style.display = tab === "browser" ? "flex" : "none";
+      refreshBtn.style.display = tab === "browser" ? "inline-block" : "none";
+      termWrap.style.display = tab === "terminal" ? "block" : "none";
+      if (tab === "terminal") {
+        connectTerminal();
+        if (term) term.focus();
+      } else {
+        refresh();
+      }
+    }
+
+    tabBrowser.addEventListener("click", () => setTab("browser"));
+    tabTerminal.addEventListener("click", () => setTab("terminal"));
 
     async function sendAction(path, payload) {
       const res = await fetch(path, {
@@ -186,8 +295,12 @@ function renderViewPage(): Response {
         statusEl.textContent = controlling ? "Releasing…" : "Taking control…";
         const state = await sendAction(controlling ? "/view/control/release" : "/view/control/take", {});
         updateControlUi(state);
-        if (controlling) img.focus();
-        await refresh();
+        if (controlling) {
+          if (activeTab === "terminal" && term) term.focus();
+          else img.focus();
+        }
+        if (activeTab === "browser") await refresh();
+        else statusEl.textContent = controlling ? "Terminal · Controlling" : "Terminal · Viewing (Take Control to type)";
       } catch (err) {
         statusEl.textContent = "Error: " + (err.message || err);
       }
@@ -256,7 +369,7 @@ function renderViewPage(): Response {
       }, 120);
     }, { passive: false });
 
-    document.getElementById("navForm").addEventListener("submit", async (e) => {
+    navForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       let target = urlInput.value.trim();
       if (!target) return;
@@ -266,7 +379,7 @@ function renderViewPage(): Response {
       await refresh();
     });
 
-    document.getElementById("refreshBtn").addEventListener("click", refresh);
+    refreshBtn.addEventListener("click", refresh);
     syncControl().then(refresh);
     setInterval(() => { syncControl(); refresh(); }, 1500);
   </script>
@@ -673,11 +786,18 @@ function buildMcpServer(): McpServer {
   return server;
 }
 
-const server = Bun.serve({
+const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer)[] }>({
   port: PORT,
   idleTimeout: 255,
-  async fetch(req) {
+  async fetch(req, srv) {
     const url = new URL(req.url);
+
+    if (url.pathname === "/view/terminal") {
+      if (srv.upgrade(req, { data: { upstream: null, pending: [] } })) {
+        return undefined as unknown as Response;
+      }
+      return Response.json({ error: "Expected WebSocket upgrade" }, { status: 400 });
+    }
 
     if (req.method === "GET" && url.pathname === "/health") {
       return Response.json({ status: "ok", service: "openboxy-mcp" });
@@ -994,6 +1114,48 @@ const server = Bun.serve({
     }
 
     return Response.json({ error: "Not found" }, { status: 404 });
+  },
+  websocket: {
+    open(ws) {
+      const wsBase = COMPUTER_URL.replace(/^http/i, "ws");
+      const upstreamUrl = `${wsBase}/terminal?botId=${encodeURIComponent(DEFAULT_BOT_ID)}&token=${encodeURIComponent(COMPUTER_TOKEN)}`;
+      const upstream = new WebSocket(upstreamUrl);
+      upstream.binaryType = "arraybuffer";
+      ws.data.upstream = upstream;
+      upstream.onopen = () => {
+        for (const msg of ws.data.pending) {
+          upstream.send(msg);
+        }
+        ws.data.pending = [];
+      };
+      upstream.onmessage = (e) => {
+        if (ws.readyState !== 1) return;
+        if (e.data instanceof ArrayBuffer) {
+          ws.send(new Uint8Array(e.data));
+        } else {
+          ws.send(String(e.data));
+        }
+      };
+      upstream.onclose = () => {
+        try { ws.close(); } catch {}
+      };
+      upstream.onerror = () => {
+        try { ws.close(); } catch {}
+      };
+    },
+    message(ws, msg) {
+      const upstream = ws.data.upstream;
+      if (!upstream) return;
+      if (upstream.readyState === WebSocket.OPEN) {
+        upstream.send(msg);
+      } else if (upstream.readyState === WebSocket.CONNECTING) {
+        ws.data.pending.push(msg);
+      }
+    },
+    close(ws) {
+      try { ws.data.upstream?.close(); } catch {}
+      ws.data.upstream = null;
+    },
   },
 });
 
