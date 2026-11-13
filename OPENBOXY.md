@@ -39,13 +39,38 @@ Upstream OpenBot files are kept unmodified so you can pull new OpenBot releases 
 
 ## Connecting External AI Clients (`/mcp`)
 
-Point any Streamable HTTP MCP client at `http://127.0.0.1:3100/mcp` (or `https://your-domain/mcp` behind a reverse proxy like Caddy):
+OpenBoxy supports **both** authentication methods out of the box:
+
+### Option A: OAuth 2.0 PKCE (Recommended for OpenCode, Claude Code, Cursor)
+Point your client at `https://your-domain/mcp` with no manual headers:
+- In **OpenCode**, run `/mcps`, select your server, and click **Sign in**—it opens your browser to `/oauth/authorize` where you paste your `OPENBOXY_MCP_TOKEN` once and click **Approve & Connect**.
+
+### Option B: Static Bearer Token
+For headless clients or manual config:
 
 ```json
 {
   "mcpServers": {
     "openboxy": {
       "serverUrl": "https://your-domain/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_OPENBOXY_MCP_TOKEN"
+      }
+    }
+  }
+}
+```
+
+For **OpenCode** (`~/.config/opencode/opencode.jsonc`) with a static token:
+
+```jsonc
+{
+  "mcp": {
+    "openboxy": {
+      "type": "remote",
+      "url": "https://your-domain/mcp",
+      "enabled": true,
+      "oauth": false,
       "headers": {
         "Authorization": "Bearer YOUR_OPENBOXY_MCP_TOKEN"
       }
