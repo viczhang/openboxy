@@ -387,14 +387,14 @@ const server = Bun.serve({
       }
       const transport = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
+        enableJsonResponse: true,
       });
       const mcp = buildMcpServer();
+      transport.onclose = () => {
+        void mcp.close().catch(() => {});
+      };
       await mcp.connect(transport);
-      try {
-        return await transport.handleRequest(req);
-      } finally {
-        await mcp.close().catch(() => {});
-      }
+      return await transport.handleRequest(req);
     }
 
     return Response.json({ error: "Not found" }, { status: 404 });
