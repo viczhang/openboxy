@@ -84,6 +84,91 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
+function renderViewPage(): Response {
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenBoxy Live Browser</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; flex-direction: column; height: 100vh; }
+    header { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: #1e293b; border-bottom: 1px solid #334155; }
+    header form { display: flex; flex: 1; gap: 8px; }
+    input[type="text"] { flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; }
+    button { padding: 8px 14px; border-radius: 8px; border: 0; background: #3b82f6; color: #fff; font-weight: 600; cursor: pointer; font-size: 13px; }
+    button:hover { background: #2563eb; }
+    button.sec { background: #334155; }
+    button.sec:hover { background: #475569; }
+    .meta { font-size: 12px; color: #94a3b8; white-space: nowrap; }
+    main { flex: 1; display: grid; place-items: center; overflow: auto; padding: 12px; }
+    img { max-width: 100%; max-height: calc(100vh - 76px); border: 1px solid #334155; border-radius: 8px; background: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>OpenBoxy Browser</strong>
+    <form id="navForm">
+      <input id="urlInput" type="text" placeholder="https://example.com" />
+      <button type="submit">Go</button>
+    </form>
+    <button class="sec" id="refreshBtn" type="button">Refresh</button>
+    <span class="meta" id="status">Loading…</span>
+  </header>
+  <main>
+    <img id="screen" alt="Live Browser View" />
+  </main>
+  <script>
+    const img = document.getElementById("screen");
+    const urlInput = document.getElementById("urlInput");
+    const statusEl = document.getElementById("status");
+    let busy = false;
+
+    async function refresh() {
+      if (busy) return;
+      busy = true;
+      try {
+        const res = await fetch("/view/screenshot");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        img.src = "data:image/png;base64," + data.base64;
+        if (document.activeElement !== urlInput && data.url) {
+          urlInput.value = data.url;
+        }
+        statusEl.textContent = new Date().toLocaleTimeString();
+      } catch (err) {
+        statusEl.textContent = "Error: " + (err.message || err);
+      } finally {
+        busy = false;
+      }
+    }
+
+    document.getElementById("navForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      let target = urlInput.value.trim();
+      if (!target) return;
+      if (!/^https?:\\/\\//i.test(target)) target = "https://" + target;
+      statusEl.textContent = "Navigating…";
+      await fetch("/view/navigate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: target }),
+      });
+      await refresh();
+    });
+
+    document.getElementById("refreshBtn").addEventListener("click", refresh);
+    refresh();
+    setInterval(refresh, 1500);
+  </script>
+</body>
+</html>`;
+  return new Response(html, {
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+
 function renderAuthorizePage(params: {
   clientName: string;
   clientId: string;
@@ -470,8 +555,9 @@ function buildMcpServer(): McpServer {
     },
     async () => {
       return textResult({
-        url: PUBLIC_URL || "OpenBot UI is running on port 3001",
-        note: "Open this URL to view or interactively take over the browser session.",
+        url: PUBLIC_URL ? `${PUBLIC_URL}/view` : "http://127.0.0.1:3100/view",
+        openbotUi: PUBLIC_URL || "http://127.0.0.1:3001",
+        note: "Open the /view URL in a browser to see the live MCP browser screen.",
       });
     },
   );
@@ -487,6 +573,22 @@ const server = Bun.serve({
 
     if (req.method === "GET" && url.pathname === "/health") {
       return Response.json({ status: "ok", service: "openboxy-mcp" });
+    }
+
+    if (req.method === "GET" && url.pathname === "/view") {
+      return renderViewPage();
+    }
+
+    if (req.method === "GET" && url.pathname === "/view/screenshot") {
+      const res = await callComputer("/screenshot", { method: "GET" });
+      return Response.json(res);
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/navigate") {
+      const body = (await req.json().catch(() => null)) as { url?: string } | null;
+      if (!body?.url) return Response.json({ error: "url is required" }, { status: 400 });
+      const res = await callComputer("/navigate", { body: { url: body.url }, timeoutMs: 65_000 });
+      return Response.json(res);
     }
 
     if (
