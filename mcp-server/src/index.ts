@@ -94,16 +94,21 @@ function renderViewPage(): Response {
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; flex-direction: column; height: 100vh; }
-    header { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: #1e293b; border-bottom: 1px solid #334155; }
-    header form { display: flex; flex: 1; gap: 8px; }
+    header { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: #1e293b; border-bottom: 1px solid #334155; flex-wrap: wrap; }
+    header form { display: flex; flex: 1; gap: 8px; min-width: 220px; }
     input[type="text"] { flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; }
-    button { padding: 8px 14px; border-radius: 8px; border: 0; background: #3b82f6; color: #fff; font-weight: 600; cursor: pointer; font-size: 13px; }
+    button { padding: 8px 14px; border-radius: 8px; border: 0; background: #3b82f6; color: #fff; font-weight: 600; cursor: pointer; font-size: 13px; white-space: nowrap; }
     button:hover { background: #2563eb; }
     button.sec { background: #334155; }
     button.sec:hover { background: #475569; }
+    button.take { background: #d97706; }
+    button.take:hover { background: #b45309; }
+    button.release { background: #16a34a; }
+    button.release:hover { background: #15803d; }
     .meta { font-size: 12px; color: #94a3b8; white-space: nowrap; }
     main { flex: 1; display: grid; place-items: center; overflow: auto; padding: 12px; }
-    img { max-width: 100%; max-height: calc(100vh - 76px); border: 1px solid #334155; border-radius: 8px; background: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+    img { max-width: 100%; max-height: calc(100vh - 76px); border: 2px solid #334155; border-radius: 8px; background: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.45); outline: none; }
+    img.controlling { border-color: #22c55e; cursor: crosshair; }
   </style>
 </head>
 <body>
@@ -113,17 +118,36 @@ function renderViewPage(): Response {
       <input id="urlInput" type="text" placeholder="https://example.com" />
       <button type="submit">Go</button>
     </form>
+    <button class="take" id="controlBtn" type="button">Take Control</button>
     <button class="sec" id="refreshBtn" type="button">Refresh</button>
     <span class="meta" id="status">Loading…</span>
   </header>
   <main>
-    <img id="screen" alt="Live Browser View" />
+    <img id="screen" tabindex="0" alt="Live Browser View" />
   </main>
   <script>
     const img = document.getElementById("screen");
     const urlInput = document.getElementById("urlInput");
+    const controlBtn = document.getElementById("controlBtn");
     const statusEl = document.getElementById("status");
     let busy = false;
+    let controlling = false;
+    let scrollTimer = null;
+    let pendingScrollY = 0;
+
+    function updateControlUi(state) {
+      controlling = state && state.holder === "human";
+      controlBtn.textContent = controlling ? "Release Control" : "Take Control";
+      controlBtn.className = controlling ? "release" : "take";
+      img.className = controlling ? "controlling" : "";
+    }
+
+    async function syncControl() {
+      try {
+        const res = await fetch("/view/control");
+        if (res.ok) updateControlUi(await res.json());
+      } catch {}
+    }
 
     async function refresh() {
       if (busy) return;
@@ -136,7 +160,7 @@ function renderViewPage(): Response {
         if (document.activeElement !== urlInput && data.url) {
           urlInput.value = data.url;
         }
-        statusEl.textContent = new Date().toLocaleTimeString();
+        statusEl.textContent = (controlling ? "Controlling · " : "Viewing · ") + new Date().toLocaleTimeString();
       } catch (err) {
         statusEl.textContent = "Error: " + (err.message || err);
       } finally {
@@ -144,23 +168,107 @@ function renderViewPage(): Response {
       }
     }
 
+    async function sendAction(path, payload) {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || ("HTTP " + res.status));
+      }
+      return res.json();
+    }
+
+    controlBtn.addEventListener("click", async () => {
+      try {
+        statusEl.textContent = controlling ? "Releasing…" : "Taking control…";
+        const state = await sendAction(controlling ? "/view/control/release" : "/view/control/take", {});
+        updateControlUi(state);
+        if (controlling) img.focus();
+        await refresh();
+      } catch (err) {
+        statusEl.textContent = "Error: " + (err.message || err);
+      }
+    });
+
+    img.addEventListener("click", async (e) => {
+      if (!controlling) return;
+      img.focus();
+      const rect = img.getBoundingClientRect();
+      if (!rect.width || !rect.height || !img.naturalWidth || !img.naturalHeight) return;
+      const x = Math.round((e.clientX - rect.left) * (img.naturalWidth / rect.width));
+      const y = Math.round((e.clientY - rect.top) * (img.naturalHeight / rect.height));
+      try {
+        await sendAction("/view/click", { x, y });
+        setTimeout(refresh, 150);
+      } catch (err) {
+        statusEl.textContent = "Error: " + (err.message || err);
+      }
+    });
+
+    img.addEventListener("keydown", async (e) => {
+      if (!controlling) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      e.preventDefault();
+      try {
+        if (e.key.length === 1) {
+          await sendAction("/view/type", { text: e.key });
+        } else {
+          await sendAction("/view/key", { key: e.key });
+        }
+        setTimeout(refresh, 150);
+      } catch (err) {
+        statusEl.textContent = "Error: " + (err.message || err);
+      }
+    });
+
+    img.addEventListener("paste", async (e) => {
+      if (!controlling) return;
+      const text = e.clipboardData && e.clipboardData.getData("text");
+      if (!text) return;
+      e.preventDefault();
+      try {
+        await sendAction("/view/type", { text });
+        setTimeout(refresh, 150);
+      } catch (err) {
+        statusEl.textContent = "Error: " + (err.message || err);
+      }
+    });
+
+    img.addEventListener("wheel", (e) => {
+      if (!controlling) return;
+      e.preventDefault();
+      pendingScrollY += e.deltaY;
+      if (scrollTimer) return;
+      scrollTimer = setTimeout(async () => {
+        const deltaY = Math.round(pendingScrollY);
+        pendingScrollY = 0;
+        scrollTimer = null;
+        if (!deltaY) return;
+        try {
+          await sendAction("/view/scroll", { deltaY });
+          setTimeout(refresh, 120);
+        } catch (err) {
+          statusEl.textContent = "Error: " + (err.message || err);
+        }
+      }, 120);
+    }, { passive: false });
+
     document.getElementById("navForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       let target = urlInput.value.trim();
       if (!target) return;
       if (!/^https?:\\/\\//i.test(target)) target = "https://" + target;
       statusEl.textContent = "Navigating…";
-      await fetch("/view/navigate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: target }),
-      });
+      await sendAction("/view/navigate", { url: target });
       await refresh();
     });
 
     document.getElementById("refreshBtn").addEventListener("click", refresh);
-    refresh();
-    setInterval(refresh, 1500);
+    syncControl().then(refresh);
+    setInterval(() => { syncControl(); refresh(); }, 1500);
   </script>
 </body>
 </html>`;
@@ -589,6 +697,107 @@ const server = Bun.serve({
       if (!body?.url) return Response.json({ error: "url is required" }, { status: 400 });
       const res = await callComputer("/navigate", { body: { url: body.url }, timeoutMs: 65_000 });
       return Response.json(res);
+    }
+
+    if (req.method === "GET" && url.pathname === "/view/control") {
+      const res = await callComputer("/control", { method: "GET" });
+      return Response.json(res);
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/control/take") {
+      type ControlShape = {
+        holder?: string;
+        requestId?: string;
+        request?: { id?: string; requestId?: string };
+      };
+      const extractId = (c: ControlShape): string | undefined =>
+        c.request?.id ?? c.request?.requestId ?? c.requestId;
+
+      const current = (await callComputer("/control", { method: "GET" })) as ControlShape;
+      if (current.holder === "human") {
+        return Response.json(current);
+      }
+      let requestId = extractId(current);
+      if (!requestId) {
+        const reqRes = (await callComputer("/control/request", {
+          body: { source: "manual", reason: "Owner taking control from /view" },
+        })) as ControlShape;
+        requestId = extractId(reqRes);
+      }
+      if (!requestId) {
+        return Response.json({ error: "Could not obtain control requestId" }, { status: 500 });
+      }
+      const taken = await callComputer("/control/take", {
+        body: { requestId, by: "owner" },
+      });
+      return Response.json(taken);
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/control/release") {
+      const current = (await callComputer("/control", { method: "GET" })) as {
+        requestId?: string;
+        request?: { id?: string; requestId?: string };
+      };
+      const requestId = current.request?.id ?? current.request?.requestId ?? current.requestId;
+      if (!requestId) {
+        return Response.json(current);
+      }
+      const released = await callComputer("/control/release", {
+        body: { requestId },
+      });
+      return Response.json(released);
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/click") {
+      const body = (await req.json().catch(() => null)) as { x?: number; y?: number } | null;
+      if (typeof body?.x !== "number" || typeof body?.y !== "number") {
+        return Response.json({ error: "x and y are required" }, { status: 400 });
+      }
+      try {
+        const res = await callComputer("/human/click", { body: { x: body.x, y: body.y } });
+        return Response.json(res);
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/type") {
+      const body = (await req.json().catch(() => null)) as { text?: string } | null;
+      if (typeof body?.text !== "string") {
+        return Response.json({ error: "text is required" }, { status: 400 });
+      }
+      try {
+        const res = await callComputer("/human/type", { body: { text: body.text } });
+        return Response.json(res);
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/key") {
+      const body = (await req.json().catch(() => null)) as { key?: string } | null;
+      if (typeof body?.key !== "string" || !body.key) {
+        return Response.json({ error: "key is required" }, { status: 400 });
+      }
+      try {
+        const res = await callComputer("/human/key", { body: { key: body.key } });
+        return Response.json(res);
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/scroll") {
+      const body = (await req.json().catch(() => null)) as { deltaY?: number } | null;
+      if (typeof body?.deltaY !== "number") {
+        return Response.json({ error: "deltaY is required" }, { status: 400 });
+      }
+      try {
+        const res = await callComputer("/human/scroll", { body: { deltaY: body.deltaY } });
+        return Response.json(res);
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
     }
 
     if (
