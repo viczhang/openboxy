@@ -243,7 +243,7 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
           try {
             const msg = JSON.parse(e.data);
             if (msg.type === "snapshot") term.reset();
-            else if (msg.type === "error") term.writeln("\\r\\n[Error: " + msg.message + "]");
+            else if (msg.type === "error") term.writeln("\\r\\n[Error: " + (msg.error || msg.message || "Unknown error") + "]");
           } catch {}
           return;
         }
@@ -1126,7 +1126,7 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
   websocket: {
     open(ws) {
       const wsBase = COMPUTER_URL.replace(/^http/i, "ws");
-      const upstreamUrl = `${wsBase}/terminal?botId=${encodeURIComponent(DEFAULT_BOT_ID)}&token=${encodeURIComponent(COMPUTER_TOKEN)}`;
+      const upstreamUrl = `${wsBase}/terminal?bot=${encodeURIComponent(DEFAULT_BOT_ID)}&token=${encodeURIComponent(COMPUTER_TOKEN)}`;
       const upstream = new WebSocket(upstreamUrl);
       upstream.binaryType = "arraybuffer";
       ws.data.upstream = upstream;
