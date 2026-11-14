@@ -78,6 +78,7 @@ function safeNextPath(raw: string | null): string {
 }
 
 const OPENBOXY_THEME_HEAD = `
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.2.5/index.css" />
   <script>
     (function () {
       try {
@@ -111,7 +112,8 @@ const OPENBOXY_THEME_HEAD = `
       --destructive: oklch(0.704 0.191 22.216);
     }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--background); color: var(--card-foreground); }
+    body { margin: 0; font-family: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif; background: var(--background); color: var(--card-foreground); -webkit-font-smoothing: antialiased; }
+    button, input { font-family: inherit; }
     .obx-center { display: grid; place-items: center; min-height: 100vh; padding: 16px; }
     .obx-card { background: var(--card); color: var(--card-foreground); border: 1px solid var(--border); border-radius: 14px; padding: 28px; width: 100%; max-width: 410px; box-shadow: 0 12px 32px rgba(0,0,0,.08); }
     .dark .obx-card { box-shadow: 0 20px 44px rgba(0,0,0,.4); }
@@ -996,12 +998,12 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
         2,
       );
       const agentPrompt = `Add the remote Streamable HTTP MCP server "${mcpName}" at ${mcpUrl} (with OAuth) to my MCP client config, then tell me how to finish signing in.`;
-      const pill = `<div id="openboxy-nav-pill" style="position:fixed;bottom:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:999px;padding:5px 8px;box-shadow:0 8px 24px rgba(0,0,0,0.14);font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;font-size:12px;">
+      const pill = `<div id="openboxy-nav-pill" style="position:fixed;bottom:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:999px;padding:5px 8px;box-shadow:0 8px 24px rgba(0,0,0,0.14);font-family:inherit;font-size:12px;">
   <a href="/view" style="color:var(--primary-foreground);text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--primary);">Live Browser</a>
   <a href="/view/terminal" style="color:var(--card-foreground);text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--muted);">Terminal</a>
-  <button type="button" onclick="var m=document.getElementById('openboxy-mcp-modal');m.style.display=m.style.display==='block'?'none':'block';" style="color:var(--card-foreground);border:1px solid var(--border);cursor:pointer;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--background);font-size:12px;">MCP Setup</button>
+  <button type="button" onclick="var m=document.getElementById('openboxy-mcp-modal');m.style.display=m.style.display==='block'?'none':'block';" style="color:var(--card-foreground);border:1px solid var(--border);cursor:pointer;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--background);font-family:inherit;font-size:12px;">MCP Setup</button>
 </div>
-<div id="openboxy-mcp-modal" style="display:none;position:fixed;bottom:56px;right:14px;z-index:99999;width:min(480px,calc(100vw - 28px));max-height:80vh;overflow:auto;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:14px;padding:16px 18px;box-shadow:0 16px 40px rgba(0,0,0,0.22);font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;font-size:13px;line-height:1.45;">
+<div id="openboxy-mcp-modal" style="display:none;position:fixed;bottom:56px;right:14px;z-index:99999;width:min(480px,calc(100vw - 28px));max-height:80vh;overflow:auto;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:14px;padding:16px 18px;box-shadow:0 16px 40px rgba(0,0,0,0.22);font-family:inherit;font-size:13px;line-height:1.45;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
     <strong style="font-size:14px;color:var(--card-foreground);">Connect MCP (${escapeHtml(mcpName)})</strong>
     <button type="button" onclick="document.getElementById('openboxy-mcp-modal').style.display='none';" style="background:transparent;border:0;color:var(--muted-foreground);cursor:pointer;font-size:18px;line-height:1;">&times;</button>
