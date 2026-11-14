@@ -242,6 +242,9 @@ function renderLoginPage(nextPath: string, error?: string): Response {
       <input id="token" name="token" type="password" autocomplete="current-password" required autofocus placeholder="Paste your API token" />
       <button type="submit">Sign In</button>
     </form>
+    <p style="margin: 16px 0 0; font-size: 12.5px; text-align: center;">
+      New here? See <a href="https://github.com/viczhang/openboxy" target="_blank" rel="noopener noreferrer" style="color: var(--card-foreground); font-weight: 600;">github.com/viczhang/openboxy</a> to learn how OpenBoxy works or host your own.
+    </p>
   </div>
 </body>
 </html>`;
