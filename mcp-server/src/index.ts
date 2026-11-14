@@ -1,25 +1,86 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
+import { SandboxManager, sanitizeUserId } from "./sandbox.ts";
 
 const PORT = Number(process.env.MCP_PORT || 3100);
-const COMPUTER_URL = (process.env.COMPUTER_URL || "http://openboxy:4100").replace(/\/+$/, "");
-const UI_URL = (process.env.OPENBOXY_UI_URL || "http://openboxy:3001").replace(/\/+$/, "");
-const COMPUTER_TOKEN = (process.env.COMPUTER_TOKEN || "").trim();
-const MCP_TOKEN = (process.env.OPENBOXY_MCP_TOKEN || "").trim();
-const DEFAULT_BOT_ID = (process.env.OPENBOXY_BOT_ID || "default").trim();
+const DEFAULT_USER_ID = sanitizeUserId(process.env.OPENBOXY_BOT_ID || "default");
 const PUBLIC_URL = (process.env.OPENBOXY_PUBLIC_URL || "").replace(/\/+$/, "");
 const UI_AUTH = (process.env.OPENBOXY_UI_AUTH || "token").trim().toLowerCase();
+const USERS_FILE = (process.env.OPENBOXY_USERS_FILE || "/data/users.json").trim();
 
-if (!COMPUTER_TOKEN) {
-  console.error("[openboxy-mcp] COMPUTER_TOKEN must be set.");
+function loadUserTokens(): Map<string, string> {
+  const users = new Map<string, string>();
+  const defaultToken = (process.env.OPENBOXY_MCP_TOKEN || "").trim();
+  if (defaultToken) {
+    users.set(DEFAULT_USER_ID, defaultToken);
+  }
+
+  const rawList = (process.env.OPENBOXY_USERS || "").trim();
+  if (rawList) {
+    for (const entry of rawList.split(/[\n,]+/)) {
+      const trimmed = entry.trim();
+      if (!trimmed) continue;
+      const sep = trimmed.includes(":") ? ":" : "=";
+      const idx = trimmed.indexOf(sep);
+      if (idx <= 0) continue;
+      const uid = sanitizeUserId(trimmed.slice(0, idx));
+      const tok = trimmed.slice(idx + 1).trim();
+      if (uid && tok) users.set(uid, tok);
+    }
+  }
+
+  const parseJsonMap = (raw: string) => {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === "string" && v.trim()) {
+          users.set(sanitizeUserId(k), v.trim());
+        }
+      }
+    }
+  };
+
+  const rawJson = (process.env.OPENBOXY_USERS_JSON || "").trim();
+  if (rawJson) {
+    try {
+      parseJsonMap(rawJson);
+    } catch (err) {
+      console.error("[openboxy-mcp] Invalid OPENBOXY_USERS_JSON:", err);
+      process.exit(1);
+    }
+  }
+
+  if (USERS_FILE && existsSync(USERS_FILE)) {
+    try {
+      parseJsonMap(readFileSync(USERS_FILE, "utf8"));
+    } catch (err) {
+      console.error(`[openboxy-mcp] Failed reading ${USERS_FILE}:`, err);
+    }
+  }
+
+  return users;
+}
+
+const userTokens = loadUserTokens();
+if (userTokens.size === 0) {
+  console.error("[openboxy-mcp] At least one user token must be set via OPENBOXY_MCP_TOKEN, OPENBOXY_USERS, or OPENBOXY_USERS_JSON.");
   process.exit(1);
 }
-if (!MCP_TOKEN) {
-  console.error("[openboxy-mcp] OPENBOXY_MCP_TOKEN must be set.");
-  process.exit(1);
-}
+
+const SESSION_SECRET = (() => {
+  const explicit = (process.env.OPENBOXY_SESSION_SECRET || "").trim();
+  if (explicit) return explicit;
+  const seed = Array.from(userTokens.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}:${v}`)
+    .join("|");
+  return createHash("sha256").update(`openboxy:${seed}`).digest("hex");
+})();
+
+const sandbox = new SandboxManager();
 
 function safeEqual(aStr: string, bStr: string): boolean {
   const a = Buffer.from(aStr);
@@ -27,30 +88,50 @@ function safeEqual(aStr: string, bStr: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function signAccessToken(clientId: string): string {
+function signAccessToken(clientId: string, userId: string): string {
   const payload = Buffer.from(
-    JSON.stringify({ sub: "openboxy", cid: clientId, iat: Math.floor(Date.now() / 1000) }),
+    JSON.stringify({ sub: "openboxy", uid: userId, cid: clientId, iat: Math.floor(Date.now() / 1000) }),
   ).toString("base64url");
-  const sig = createHmac("sha256", MCP_TOKEN).update(payload).digest("base64url");
+  const sig = createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
   return `obx.${payload}.${sig}`;
 }
 
-function verifyAccessToken(token: string): boolean {
-  if (safeEqual(token, MCP_TOKEN)) return true;
-  if (!token.startsWith("obx.")) return false;
-  const parts = token.split(".");
-  if (parts.length !== 3) return false;
-  const [, payload, sig] = parts;
-  if (!payload || !sig) return false;
-  const expected = createHmac("sha256", MCP_TOKEN).update(payload).digest("base64url");
-  return safeEqual(sig, expected);
+function resolveRawApiToken(offered: string): string | null {
+  let matchedUser: string | null = null;
+  for (const [uid, expected] of userTokens.entries()) {
+    if (safeEqual(offered, expected)) {
+      matchedUser = uid;
+    }
+  }
+  return matchedUser;
 }
 
-function authorized(req: Request): boolean {
+function resolveTokenUser(token: string): string | null {
+  if (!token) return null;
+  const direct = resolveRawApiToken(token);
+  if (direct) return direct;
+
+  if (!token.startsWith("obx.")) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [, payload, sig] = parts;
+  if (!payload || !sig) return null;
+  const expected = createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  if (!safeEqual(sig, expected)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { uid?: unknown };
+    if (typeof parsed.uid === "string" && userTokens.has(parsed.uid)) {
+      return parsed.uid;
+    }
+  } catch {}
+  return null;
+}
+
+function authorized(req: Request): string | null {
   const auth = req.headers.get("authorization")?.trim() || "";
   const offered = auth.replace(/^Bearer\s+/i, "").trim();
-  if (!offered) return false;
-  return verifyAccessToken(offered);
+  if (!offered) return null;
+  return resolveTokenUser(offered);
 }
 
 function readCookie(req: Request, name: string): string {
@@ -65,11 +146,14 @@ function readCookie(req: Request, name: string): string {
   return "";
 }
 
-function uiAuthorized(req: Request): boolean {
-  if (UI_AUTH === "off" || UI_AUTH === "none" || UI_AUTH === "false") return true;
-  if (authorized(req)) return true;
+function uiAuthorized(req: Request): string | null {
+  if (UI_AUTH === "off" || UI_AUTH === "none" || UI_AUTH === "false") {
+    return DEFAULT_USER_ID;
+  }
+  const bearerUser = authorized(req);
+  if (bearerUser) return bearerUser;
   const cookie = readCookie(req, "openboxy_ui");
-  return cookie ? verifyAccessToken(cookie) : false;
+  return cookie ? resolveTokenUser(cookie) : null;
 }
 
 function safeNextPath(raw: string | null): string {
@@ -129,6 +213,15 @@ const OPENBOXY_THEME_HEAD = `
   </style>
 `;
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function renderLoginPage(nextPath: string, error?: string): Response {
   const html = `<!doctype html>
 <html lang="en">
@@ -141,12 +234,12 @@ function renderLoginPage(nextPath: string, error?: string): Response {
 <body class="obx-center">
   <div class="obx-card">
     <h1>OpenBoxy</h1>
-    <p>Enter your <code>OPENBOXY_MCP_TOKEN</code> to access the live browser, terminal, and UI.</p>
+    <p>Enter your API access token to open your isolated browser session and terminal.</p>
     ${error ? `<div class="obx-err">${escapeHtml(error)}</div>` : ""}
     <form method="POST" action="/login">
       <input type="hidden" name="next" value="${escapeHtml(nextPath)}" />
-      <label for="token">Access Token</label>
-      <input id="token" name="token" type="password" autocomplete="current-password" required autofocus placeholder="Paste OPENBOXY_MCP_TOKEN" />
+      <label for="token">API Access Token</label>
+      <input id="token" name="token" type="password" autocomplete="current-password" required autofocus placeholder="Paste your API token" />
       <button type="submit">Sign In</button>
     </form>
   </div>
@@ -171,6 +264,7 @@ type RegisteredClient = {
 
 type AuthCodeRecord = {
   clientId: string;
+  userId: string;
   redirectUri: string;
   codeChallenge: string;
   expiresAt: number;
@@ -179,22 +273,31 @@ type AuthCodeRecord = {
 const registeredClients = new Map<string, RegisteredClient>();
 const authCodes = new Map<string, AuthCodeRecord>();
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
+function renderViewPage(req: Request, userId: string, initialTab: "browser" | "terminal" = "browser"): Response {
+  const mcpUrl = `${publicOrigin(req)}/mcp`;
+  const mcpName = process.env.OPENBOXY_MCP_NAME?.trim() || "boxy";
+  const opencodeJson = JSON.stringify(
+    {
+      mcp: {
+        [mcpName]: {
+          type: "remote",
+          url: mcpUrl,
+          enabled: true,
+        },
+      },
+    },
+    null,
+    2,
+  );
+  const agentPrompt = `Add the remote Streamable HTTP MCP server "${mcpName}" at ${mcpUrl} (with OAuth) to my MCP client config, then tell me how to finish signing in.`;
+  const showLogout = UI_AUTH !== "off" && UI_AUTH !== "none" && UI_AUTH !== "false";
 
-function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Response {
   const html = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OpenBoxy Live View</title>
+  <title>OpenBoxy</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
   ${OPENBOXY_THEME_HEAD}
   <style>
@@ -202,6 +305,7 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
     header { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: var(--card); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
     .brand { color: var(--card-foreground); text-decoration: none; font-size: 14px; font-weight: 600; letter-spacing: -0.05em; line-height: 1.25; padding: 6px 8px; border-radius: 8px; }
     .brand:hover { background: var(--muted); }
+    .user-pill { font-size: 12px; font-weight: 600; color: var(--muted-foreground); background: var(--muted); border: 1px solid var(--border); padding: 4px 9px; border-radius: 999px; }
     .tabs { display: flex; gap: 3px; background: var(--muted); padding: 3px; border-radius: 10px; border: 1px solid var(--border); }
     .tab { padding: 5px 12px; border-radius: 7px; border: 0; background: transparent; color: var(--muted-foreground); font-weight: 600; cursor: pointer; font-size: 13px; }
     .tab.active { background: var(--card); color: var(--card-foreground); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
@@ -222,11 +326,16 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
     #termWrap { display: none; width: 100%; height: 100%; background: var(--card); border: 2px solid var(--border); border-radius: 12px; padding: 10px; overflow: hidden; }
     #termWrap.controlling { border-color: #22c55e; }
     #terminal { width: 100%; height: 100%; }
+    #mcpModal { display: none; position: fixed; inset: 0; z-index: 99999; background: rgba(0,0,0,0.45); place-items: center; padding: 16px; }
+    #mcpModal .modal-card { width: min(500px, 100%); max-height: 85vh; overflow: auto; background: var(--card); color: var(--card-foreground); border: 1px solid var(--border); border-radius: 14px; padding: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.3); font-size: 13px; line-height: 1.5; }
+    #mcpModal pre { margin: 0 0 12px; padding: 10px 12px; background: var(--muted); border: 1px solid var(--border); border-radius: 10px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--card-foreground); }
+    #mcpModal code { background: var(--muted); color: var(--card-foreground); padding: 2px 6px; border-radius: 6px; font-size: 12px; }
   </style>
 </head>
 <body>
   <header>
     <a class="brand" href="/">OpenBoxy</a>
+    <span class="user-pill" title="Active sandbox user">@${escapeHtml(userId)}</span>
     <div class="tabs">
       <button class="tab active" id="tabBrowser" type="button">Browser</button>
       <button class="tab" id="tabTerminal" type="button">Terminal</button>
@@ -237,13 +346,35 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
     </form>
     <button class="take" id="controlBtn" type="button">Take Control</button>
     <button class="sec" id="refreshBtn" type="button">Refresh</button>
+    <button class="sec" id="mcpSetupBtn" type="button">MCP Setup</button>
     <button class="sec" id="themeBtn" type="button" title="Toggle light/dark mode"></button>
+    ${showLogout ? `<a href="/logout" style="text-decoration:none;"><button class="sec" type="button">Sign Out</button></a>` : ""}
     <span class="meta" id="status">Loading…</span>
   </header>
   <main>
     <img id="screen" tabindex="0" alt="Live Browser View" />
     <div id="termWrap"><div id="terminal"></div></div>
   </main>
+  <div id="mcpModal" onclick="if(event.target===this)this.style.display='none';">
+    <div class="modal-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <strong style="font-size:15px;">Connect MCP (${escapeHtml(mcpName)})</strong>
+        <button type="button" class="sec" style="padding:4px 9px;" onclick="document.getElementById('mcpModal').style.display='none';">&times;</button>
+      </div>
+      <div style="margin-bottom:12px;color:var(--muted-foreground);">Endpoint: <code>${escapeHtml(mcpUrl)}</code></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span><strong>Option 1 — Paste to an AI Agent</strong> (OpenCode, Claude Code, Cursor, Codex):</span>
+        <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxAgentPrompt').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+      </div>
+      <pre id="obxAgentPrompt">${escapeHtml(agentPrompt)}</pre>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span><strong>Option 2 — Manual JSON</strong> (<code>~/.config/opencode/opencode.jsonc</code>):</span>
+        <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxMcpJson').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+      </div>
+      <pre id="obxMcpJson">${escapeHtml(opencodeJson)}</pre>
+      <div style="color:var(--muted-foreground);font-size:12px;">Then in OpenCode run <code>/mcps</code>, select <strong>${escapeHtml(mcpName)}</strong>, and sign in with your API access token (user <code>@${escapeHtml(userId)}</code>).</div>
+    </div>
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
   <script>
@@ -254,6 +385,8 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
     const urlInput = document.getElementById("urlInput");
     const controlBtn = document.getElementById("controlBtn");
     const refreshBtn = document.getElementById("refreshBtn");
+    const mcpSetupBtn = document.getElementById("mcpSetupBtn");
+    const mcpModal = document.getElementById("mcpModal");
     const tabBrowser = document.getElementById("tabBrowser");
     const tabTerminal = document.getElementById("tabTerminal");
     const statusEl = document.getElementById("status");
@@ -265,6 +398,10 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
     let term = null;
     let fitAddon = null;
     let termWs = null;
+
+    mcpSetupBtn.addEventListener("click", () => {
+      mcpModal.style.display = mcpModal.style.display === "grid" ? "none" : "grid";
+    });
 
     function updateControlUi(state) {
       controlling = state && state.holder === "human";
@@ -371,16 +508,11 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
         if (typeof e.data === "string") {
           try {
             const msg = JSON.parse(e.data);
-            if (msg.type === "snapshot") term.reset();
-            else if (msg.type === "error") term.writeln("\\r\\n[Error: " + (msg.error || msg.message || "Unknown error") + "]");
+            if (msg.type === "error") term.writeln("\\r\\n[Error: " + (msg.error || msg.message || "Unknown error") + "]");
           } catch {}
           return;
         }
-        const bytes = new Uint8Array(e.data);
-        term.write(bytes);
-        if (termWs && termWs.readyState === WebSocket.OPEN) {
-          termWs.send(JSON.stringify({ type: "ack", bytes: bytes.byteLength }));
-        }
+        term.write(new Uint8Array(e.data));
       };
       termWs.onclose = () => {
         statusEl.textContent = "Terminal disconnected";
@@ -539,8 +671,8 @@ function renderAuthorizePage(params: {
 </head>
 <body class="obx-center">
   <div class="obx-card">
-    <h1>Connect to OpenBoxy</h1>
-    <p><strong>${escapeHtml(params.clientName)}</strong> is requesting MCP access to your OpenBoxy terminal and browser.<br/>Redirect: <code>${escapeHtml(params.redirectUri)}</code></p>
+    <h1>Authorize MCP Client</h1>
+    <p><strong>${escapeHtml(params.clientName)}</strong> is requesting MCP access to your OpenBoxy browser session and terminal.<br/>Redirect: <code>${escapeHtml(params.redirectUri)}</code></p>
     ${params.error ? `<div class="obx-err">${escapeHtml(params.error)}</div>` : ""}
     <form method="POST" action="/oauth/authorize">
       <input type="hidden" name="client_id" value="${escapeHtml(params.clientId)}" />
@@ -548,56 +680,17 @@ function renderAuthorizePage(params: {
       <input type="hidden" name="state" value="${escapeHtml(params.state)}" />
       <input type="hidden" name="code_challenge" value="${escapeHtml(params.codeChallenge)}" />
       <input type="hidden" name="code_challenge_method" value="${escapeHtml(params.codeChallengeMethod)}" />
-      <label for="token">OpenBoxy MCP Token (<code>OPENBOXY_MCP_TOKEN</code>)</label>
-      <input id="token" name="token" type="password" autocomplete="current-password" required autofocus placeholder="Paste your OPENBOXY_MCP_TOKEN" />
+      <label for="token">Your API Access Token</label>
+      <input id="token" name="token" type="password" autocomplete="off" required placeholder="Paste your API access token" />
       <button type="submit">Approve &amp; Connect</button>
     </form>
   </div>
 </body>
 </html>`;
   return new Response(html, {
-    status: params.error ? 403 : 200,
+    status: params.error ? 401 : 200,
     headers: { "Content-Type": "text/html; charset=utf-8" },
   });
-}
-
-async function callComputer<T = Record<string, unknown>>(
-  path: string,
-  options: { method?: "GET" | "POST"; body?: unknown; timeoutMs?: number } = {},
-): Promise<T> {
-  const method = options.method ?? (options.body !== undefined ? "POST" : "GET");
-  const headers: Record<string, string> = {
-    "x-openbot-computer-token": COMPUTER_TOKEN,
-    "x-openbot-bot-id": DEFAULT_BOT_ID,
-  };
-  if (options.body !== undefined) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  const res = await fetch(`${COMPUTER_URL}${path}`, {
-    method,
-    headers,
-    ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
-    signal: AbortSignal.timeout(options.timeoutMs ?? 60_000),
-  });
-
-  const text = await res.text();
-  let parsed: unknown = null;
-  try {
-    parsed = text ? JSON.parse(text) : {};
-  } catch {
-    parsed = { raw: text };
-  }
-
-  if (!res.ok) {
-    const errMsg =
-      parsed && typeof parsed === "object" && "error" in parsed && typeof (parsed as { error: unknown }).error === "string"
-        ? (parsed as { error: string }).error
-        : `HTTP ${res.status}: ${text.slice(0, 500)}`;
-    throw new Error(errMsg);
-  }
-
-  return parsed as T;
 }
 
 function textResult(data: unknown) {
@@ -611,17 +704,17 @@ function textResult(data: unknown) {
   };
 }
 
-function buildMcpServer(): McpServer {
+function buildMcpServer(userId: string): McpServer {
   const server = new McpServer({
     name: process.env.OPENBOXY_MCP_NAME?.trim() || "boxy",
-    version: "1.0.0",
+    version: "2.0.0",
   });
 
   server.registerTool(
     "shell",
     {
       description:
-        "Run a bash command in the persistent workspace shell (/workspace). Returns stdout, stderr, exit code, and cwd.",
+        "Run a bash command in your persistent workspace shell. Returns stdout, stderr, exit code, and cwd.",
       inputSchema: {
         command: z.string().min(1).describe("Bash command to execute"),
         timeout_s: z
@@ -634,11 +727,8 @@ function buildMcpServer(): McpServer {
       },
     },
     async ({ command, timeout_s }) => {
-      const timeoutMs = timeout_s ? timeout_s * 1000 : undefined;
-      const result = await callComputer("/exec", {
-        body: { command, ...(timeoutMs ? { timeoutMs } : {}) },
-        timeoutMs: (timeoutMs ?? 60_000) + 5_000,
-      });
+      const timeoutMs = timeout_s ? timeout_s * 1000 : 60_000;
+      const result = await sandbox.execShell(userId, command, timeoutMs);
       return textResult(result);
     },
   );
@@ -646,23 +736,21 @@ function buildMcpServer(): McpServer {
   server.registerTool(
     "read_file",
     {
-      description: "Read a file from /workspace (with optional 1-based line offset and limit).",
+      description: "Read a file from your workspace (with optional 1-based line offset and limit).",
       inputSchema: {
-        path: z.string().min(1).describe("File path relative to /workspace or inside /workspace"),
+        path: z.string().min(1).describe("File path relative to workspace"),
         offset: z.number().int().min(1).optional().describe("First line to return (1-based)"),
         limit: z.number().int().min(1).max(5000).optional().describe("Maximum lines to return"),
       },
     },
-    async ({ path, offset, limit }) => {
-      const res = await callComputer<{ contents?: string; path?: string; [k: string]: unknown }>("/files/read", {
-        body: { path },
-      });
-      if (typeof res.contents === "string" && (offset !== undefined || limit !== undefined)) {
+    async ({ path: filePath, offset, limit }) => {
+      const res = await sandbox.readFile(userId, filePath);
+      if (offset !== undefined || limit !== undefined) {
         const lines = res.contents.split("\n");
         const start = Math.max(0, (offset ?? 1) - 1);
         const end = limit !== undefined ? start + limit : lines.length;
         return textResult({
-          ...res,
+          path: res.path,
           offset: start + 1,
           totalLines: lines.length,
           contents: lines.slice(start, end).join("\n"),
@@ -675,80 +763,61 @@ function buildMcpServer(): McpServer {
   server.registerTool(
     "write_file",
     {
-      description: "Create or overwrite a file in /workspace (parent directories are created automatically).",
+      description: "Create or overwrite a file in your workspace (parent directories are created automatically).",
       inputSchema: {
         path: z.string().min(1).describe("Target file path"),
         content: z.string().describe("Full file contents"),
         append: z.boolean().optional().describe("Append instead of overwriting"),
       },
     },
-    async ({ path, content, append }) => {
-      const res = await callComputer("/files/write", {
-        body: { path, contents: content, append: append === true },
-      });
-      return textResult(res);
+    async ({ path: filePath, content, append }) => {
+      return textResult(await sandbox.writeFile(userId, filePath, content, append === true));
     },
   );
 
   server.registerTool(
     "edit_file",
     {
-      description: "Replace an exact string occurrence in an existing file in /workspace.",
+      description: "Replace an exact string occurrence in an existing file in your workspace.",
       inputSchema: {
         path: z.string().min(1).describe("Target file path"),
         old_text: z.string().min(1).describe("Exact text to find"),
         new_text: z.string().describe("Replacement text"),
       },
     },
-    async ({ path, old_text, new_text }) => {
-      const readRes = await callComputer<{ contents?: string }>("/files/read", {
-        body: { path },
-      });
-      const contents = readRes.contents;
-      if (typeof contents !== "string") {
-        throw new Error(`Unable to read text contents of ${path}`);
+    async ({ path: filePath, old_text, new_text }) => {
+      const res = await sandbox.readFile(userId, filePath);
+      if (!res.contents.includes(old_text)) {
+        throw new Error(`old_text not found in ${filePath}`);
       }
-      if (!contents.includes(old_text)) {
-        throw new Error(`old_text not found in ${path}`);
-      }
-      const updated = contents.replace(old_text, new_text);
-      const writeRes = await callComputer("/files/write", {
-        body: { path, contents: updated, append: false },
-      });
-      return textResult(writeRes);
+      const updated = res.contents.replace(old_text, new_text);
+      return textResult(await sandbox.writeFile(userId, filePath, updated, false));
     },
   );
 
   server.registerTool(
     "list_dir",
     {
-      description: "List files and directories inside /workspace.",
+      description: "List files and directories inside your workspace.",
       inputSchema: {
-        path: z.string().optional().describe("Directory path (defaults to /workspace root)"),
+        path: z.string().optional().describe("Directory path (defaults to workspace root)"),
       },
     },
-    async ({ path }) => {
-      const res = await callComputer("/files/list", {
-        body: path ? { path } : {},
-      });
-      return textResult(res);
+    async ({ path: dirPath }) => {
+      return textResult(await sandbox.listDir(userId, dirPath));
     },
   );
 
   server.registerTool(
     "browser_navigate",
     {
-      description: "Navigate the persistent Chromium browser to a URL and return readable page text.",
+      description: "Navigate your persistent Chromium browser to a URL and return readable page text.",
       inputSchema: {
         url: z.string().url().describe("Target URL (http:// or https://)"),
       },
     },
     async ({ url }) => {
-      const res = await callComputer("/navigate", {
-        body: { url },
-        timeoutMs: 65_000,
-      });
-      return textResult(res);
+      return textResult(await sandbox.navigate(userId, url));
     },
   );
 
@@ -756,12 +825,11 @@ function buildMcpServer(): McpServer {
     "browser_snapshot",
     {
       description:
-        "Take an accessibility (ARIA) snapshot of the current page. Returns snapshotId and element refs for browser_click / browser_type.",
+        "Take a snapshot of interactive elements on the current page. Returns snapshotId and element refs for browser_click / browser_type.",
       inputSchema: {},
     },
     async () => {
-      const res = await callComputer("/snapshot", { body: {} });
-      return textResult(res);
+      return textResult(await sandbox.snapshot(userId));
     },
   );
 
@@ -772,8 +840,7 @@ function buildMcpServer(): McpServer {
       inputSchema: {},
     },
     async () => {
-      const res = await callComputer("/read", { method: "GET" });
-      return textResult(res);
+      return textResult(await sandbox.readPage(userId));
     },
   );
 
@@ -787,10 +854,7 @@ function buildMcpServer(): McpServer {
       },
     },
     async ({ ref, snapshotId }) => {
-      const res = await callComputer("/click", {
-        body: { ref, snapshotId },
-      });
-      return textResult(res);
+      return textResult(await sandbox.clickRef(userId, ref, snapshotId));
     },
   );
 
@@ -806,10 +870,7 @@ function buildMcpServer(): McpServer {
       },
     },
     async ({ ref, snapshotId, text, submit }) => {
-      const res = await callComputer("/type", {
-        body: { ref, snapshotId, text, submit: submit === true },
-      });
-      return textResult(res);
+      return textResult(await sandbox.typeRef(userId, ref, snapshotId, text, submit === true));
     },
   );
 
@@ -824,14 +885,7 @@ function buildMcpServer(): McpServer {
       },
     },
     async ({ key, ref, snapshotId }) => {
-      const res = await callComputer("/key", {
-        body: {
-          key,
-          ...(ref !== undefined ? { ref } : {}),
-          ...(snapshotId !== undefined ? { snapshotId } : {}),
-        },
-      });
-      return textResult(res);
+      return textResult(await sandbox.pressKey(userId, key, ref, snapshotId));
     },
   );
 
@@ -844,10 +898,7 @@ function buildMcpServer(): McpServer {
       },
     },
     async ({ deltaY }) => {
-      const res = await callComputer("/scroll", {
-        body: { deltaY },
-      });
-      return textResult(res);
+      return textResult(await sandbox.scroll(userId, deltaY));
     },
   );
 
@@ -858,14 +909,7 @@ function buildMcpServer(): McpServer {
       inputSchema: {},
     },
     async () => {
-      const res = await callComputer<{
-        base64: string;
-        width: number;
-        height: number;
-        url: string;
-        capturedAt: string;
-      }>("/screenshot", { method: "GET" });
-
+      const res = await sandbox.screenshot(userId);
       return {
         content: [
           {
@@ -890,14 +934,16 @@ function buildMcpServer(): McpServer {
   server.registerTool(
     "browser_view",
     {
-      description: "Get the live OpenBot UI URL where the user can visually watch or take over the browser.",
+      description: "Get the live OpenBoxy UI URL where the user can visually watch or take over the browser.",
       inputSchema: {},
     },
     async () => {
+      const base = PUBLIC_URL || `http://127.0.0.1:${PORT}`;
       return textResult({
-        url: PUBLIC_URL ? `${PUBLIC_URL}/view` : "http://127.0.0.1:3100/view",
-        openbotUi: PUBLIC_URL || "http://127.0.0.1:3001",
-        note: "Open the /view URL in a browser to see the live MCP browser screen.",
+        userId,
+        url: `${base}/view`,
+        terminalUrl: `${base}/view/terminal`,
+        note: "Open the /view URL in a browser (signed in with your API token) to watch or take over your browser.",
       });
     },
   );
@@ -905,328 +951,62 @@ function buildMcpServer(): McpServer {
   return server;
 }
 
-function injectOpenBoxyShell(rawHtml: string, req: Request): string {
-  const html = rawHtml.replace("<title>OpenBot</title>", "<title>OpenBoxy</title>");
-  const mcpUrl = `${publicOrigin(req)}/mcp`;
-  const mcpName = process.env.OPENBOXY_MCP_NAME?.trim() || "boxy";
-  const opencodeJson = JSON.stringify(
-    {
-      mcp: {
-        [mcpName]: {
-          type: "remote",
-          url: mcpUrl,
-          enabled: true,
-        },
-      },
-    },
-    null,
-    2,
-  );
-  const agentPrompt = `Add the remote Streamable HTTP MCP server "${mcpName}" at ${mcpUrl} (with OAuth) to my MCP client config, then tell me how to finish signing in.`;
-  const snippet = `<div id="openboxy-nav-pill" style="position:fixed;bottom:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:999px;padding:5px 8px;box-shadow:0 8px 24px rgba(0,0,0,0.14);font-family:inherit;font-size:12px;touch-action:none;">
-  <span id="openboxy-drag-handle" title="Drag to move" style="cursor:grab;user-select:none;padding:2px 4px;color:var(--muted-foreground);font-weight:700;letter-spacing:-1px;">&#8942;&#8942;</span>
-  <a href="/view" style="color:var(--primary-foreground);text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--primary);">Live Browser</a>
-  <a href="/view/terminal" style="color:var(--card-foreground);text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--muted);">Terminal</a>
-  <button type="button" onclick="var m=document.getElementById('openboxy-mcp-modal');m.style.display=m.style.display==='grid'?'none':'grid';" style="color:var(--card-foreground);border:1px solid var(--border);cursor:pointer;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--background);font-family:inherit;font-size:12px;">MCP Setup</button>
-</div>
-<div id="openboxy-mcp-modal" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.45);place-items:center;padding:16px;" onclick="if(event.target===this)this.style.display='none';">
-  <div style="width:min(480px,100%);max-height:85vh;overflow:auto;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:14px;padding:18px 20px;box-shadow:0 20px 50px rgba(0,0,0,0.3);font-family:inherit;font-size:13px;line-height:1.45;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <strong style="font-size:15px;color:var(--card-foreground);">Connect MCP (${escapeHtml(mcpName)})</strong>
-      <button type="button" onclick="document.getElementById('openboxy-mcp-modal').style.display='none';" style="background:transparent;border:0;color:var(--muted-foreground);cursor:pointer;font-size:18px;line-height:1;">&times;</button>
-    </div>
-    <div style="margin-bottom:10px;color:var(--muted-foreground);">Endpoint: <code style="background:var(--muted);color:var(--card-foreground);padding:2px 6px;border-radius:6px;">${escapeHtml(mcpUrl)}</code></div>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:var(--card-foreground);">
-      <span><strong>Option 1 — Paste to an AI Agent</strong> (OpenCode, Claude Code, Cursor, Codex):</span>
-      <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-agent-prompt').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:var(--muted);color:var(--card-foreground);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;font-weight:600;">Copy</button>
-    </div>
-    <pre id="openboxy-agent-prompt" style="margin:0 0 10px 0;padding:8px 10px;background:var(--muted);border:1px solid var(--border);border-radius:10px;white-space:pre-wrap;word-break:break-word;font-size:11px;color:var(--card-foreground);">${escapeHtml(agentPrompt)}</pre>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:var(--card-foreground);">
-      <span><strong>Option 2 — Manual JSON</strong> (<code style="background:var(--muted);padding:1px 5px;border-radius:4px;">~/.config/opencode/opencode.jsonc</code>):</span>
-      <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-mcp-json').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:var(--muted);color:var(--card-foreground);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;font-weight:600;">Copy</button>
-    </div>
-    <pre id="openboxy-mcp-json" style="margin:0 0 8px 0;padding:8px 10px;background:var(--muted);border:1px solid var(--border);border-radius:10px;overflow:auto;font-size:11px;color:var(--card-foreground);">${escapeHtml(opencodeJson)}</pre>
-    <div style="color:var(--muted-foreground);font-size:12px;">Then in OpenCode run <code style="background:var(--muted);color:var(--card-foreground);padding:1px 5px;border-radius:4px;">/mcps</code>, select <strong style="color:var(--card-foreground);">${escapeHtml(mcpName)}</strong>, and sign in with your <code style="background:var(--muted);color:var(--card-foreground);padding:1px 5px;border-radius:4px;">OPENBOXY_MCP_TOKEN</code>.</div>
-  </div>
-</div>
-<script>
-  (function () {
-    function rebrand() {
-      if (document.title.indexOf("OpenBot") !== -1) {
-        document.title = document.title.replace(/\\bOpenBot\\b/g, "OpenBoxy");
-      }
-      var marks = document.querySelectorAll('[data-slot="trademark"]');
-      for (var i = 0; i < marks.length; i++) {
-        var sup = marks[i];
-        var parent = sup.parentElement;
-        sup.remove();
-        if (parent) {
-          for (var j = 0; j < parent.childNodes.length; j++) {
-            var n = parent.childNodes[j];
-            if (n.nodeType === 3 && n.nodeValue && n.nodeValue.indexOf("OpenBot") !== -1) {
-              n.nodeValue = n.nodeValue.replace(/\\bOpenBot\\b/g, "OpenBoxy");
-            }
-          }
-        }
-      }
-    }
-    rebrand();
-    new MutationObserver(rebrand).observe(document.documentElement, { childList: true, subtree: true });
+type TerminalSocketData = {
+  userId: string;
+  proc?: ReturnType<typeof Bun.spawn>;
+};
 
-    var pill = document.getElementById("openboxy-nav-pill");
-    var handle = document.getElementById("openboxy-drag-handle");
-    if (pill && handle) {
-      function clampPos(left, top) {
-        var r = pill.getBoundingClientRect();
-        var maxL = Math.max(8, window.innerWidth - r.width - 8);
-        var maxT = Math.max(8, window.innerHeight - r.height - 8);
-        return {
-          left: Math.min(Math.max(8, left), maxL),
-          top: Math.min(Math.max(8, top), maxT),
-        };
-      }
-      function applyPos(left, top) {
-        var p = clampPos(left, top);
-        pill.style.left = p.left + "px";
-        pill.style.top = p.top + "px";
-        pill.style.right = "auto";
-        pill.style.bottom = "auto";
-        return p;
-      }
-      try {
-        var saved = JSON.parse(window.localStorage.getItem("openboxy-pill-pos") || "null");
-        if (saved && typeof saved.left === "number" && typeof saved.top === "number") {
-          applyPos(saved.left, saved.top);
-        }
-      } catch {}
-      var dragging = false, startX = 0, startY = 0, origLeft = 0, origTop = 0;
-      handle.addEventListener("pointerdown", function (e) {
-        dragging = true;
-        handle.style.cursor = "grabbing";
-        var r = pill.getBoundingClientRect();
-        startX = e.clientX;
-        startY = e.clientY;
-        origLeft = r.left;
-        origTop = r.top;
-        handle.setPointerCapture(e.pointerId);
-        e.preventDefault();
-      });
-      handle.addEventListener("pointermove", function (e) {
-        if (!dragging) return;
-        applyPos(origLeft + (e.clientX - startX), origTop + (e.clientY - startY));
-      });
-      function stopDrag(e) {
-        if (!dragging) return;
-        dragging = false;
-        handle.style.cursor = "grab";
-        var r = pill.getBoundingClientRect();
-        try { window.localStorage.setItem("openboxy-pill-pos", JSON.stringify({ left: r.left, top: r.top })); } catch {}
-        try { handle.releasePointerCapture(e.pointerId); } catch {}
-      }
-      handle.addEventListener("pointerup", stopDrag);
-      handle.addEventListener("pointercancel", stopDrag);
-      window.addEventListener("resize", function () {
-        if (pill.style.left && pill.style.left !== "auto") {
-          var r = pill.getBoundingClientRect();
-          applyPos(r.left, r.top);
-        }
-      });
-    }
-  })();
-</script>`;
-  return html.includes("</body>") ? html.replace("</body>", `${snippet}</body>`) : `${html}${snippet}`;
-}
-
-const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer)[]; uiPath?: string }>({
+const server = Bun.serve<TerminalSocketData>({
   port: PORT,
-  idleTimeout: 255,
+  idleTimeout: 120,
   async fetch(req, srv) {
     const url = new URL(req.url);
 
-    if (url.pathname === "/view/terminal") {
-      if (!uiAuthorized(req)) {
-        if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
-          return Response.json({ error: "Unauthorized" }, { status: 401 });
-        }
-        return new Response(null, {
-          status: 302,
-          headers: { Location: "/login?next=%2Fview%2Fterminal" },
-        });
-      }
-      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
-        if (srv.upgrade(req, { data: { upstream: null, pending: [] } })) {
-          return undefined as unknown as Response;
-        }
-        return Response.json({ error: "Expected WebSocket upgrade" }, { status: 400 });
-      }
-      return renderViewPage("terminal");
-    }
-
-    if (req.method === "GET" && url.pathname === "/login") {
-      return renderLoginPage(safeNextPath(url.searchParams.get("next")));
-    }
-
-    if (req.method === "POST" && url.pathname === "/login") {
-      const form = await req.formData();
-      const token = String(form.get("token") || "").trim();
-      const nextPath = safeNextPath(String(form.get("next") || "/"));
-      if (!token || !safeEqual(token, MCP_TOKEN)) {
-        return renderLoginPage(nextPath, "Invalid token.");
-      }
-      const isHttps =
-        req.headers.get("x-forwarded-proto") === "https" || url.protocol === "https:";
-      const cookie = `openboxy_ui=${encodeURIComponent(signAccessToken("ui"))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}${isHttps ? "; Secure" : ""}`;
-      return new Response(null, {
-        status: 303,
-        headers: { Location: nextPath, "Set-Cookie": cookie },
+    if (req.method === "GET" && url.pathname === "/healthz") {
+      return Response.json({
+        ok: true,
+        service: "openboxy-mcp",
+        mode: "single-container",
+        users: userTokens.size,
       });
     }
 
-    if (req.method === "POST" && url.pathname === "/logout") {
+    if (req.method === "GET" && url.pathname === "/login") {
+      const nextPath = safeNextPath(url.searchParams.get("next"));
+      if (uiAuthorized(req)) {
+        return Response.redirect(new URL(nextPath, publicOrigin(req)).toString(), 302);
+      }
+      return renderLoginPage(nextPath);
+    }
+
+    if (req.method === "POST" && url.pathname === "/login") {
+      const form = await req.formData().catch(() => null);
+      const token = String(form?.get("token") || "").trim();
+      const nextPath = safeNextPath(String(form?.get("next") || "/"));
+      const userId = resolveTokenUser(token);
+      if (!userId) {
+        return renderLoginPage(nextPath, "Invalid API access token.");
+      }
+      const isSecure = publicOrigin(req).startsWith("https://");
+      const sessionCookie = encodeURIComponent(signAccessToken("ui", userId));
+      return new Response(null, {
+        status: 303,
+        headers: {
+          Location: nextPath,
+          "Set-Cookie": `openboxy_ui=${sessionCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}${isSecure ? "; Secure" : ""}`,
+        },
+      });
+    }
+
+    if (url.pathname === "/logout") {
+      const isSecure = publicOrigin(req).startsWith("https://");
       return new Response(null, {
         status: 303,
         headers: {
           Location: "/login",
-          "Set-Cookie": "openboxy_ui=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+          "Set-Cookie": `openboxy_ui=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${isSecure ? "; Secure" : ""}`,
         },
       });
-    }
-
-    if (req.method === "GET" && url.pathname === "/health") {
-      return Response.json({ status: "ok", service: "openboxy-mcp" });
-    }
-
-    if (url.pathname === "/view" || url.pathname.startsWith("/view/")) {
-      if (!uiAuthorized(req)) {
-        if (req.method === "GET" && url.pathname === "/view") {
-          return new Response(null, {
-            status: 302,
-            headers: { Location: "/login?next=%2Fview" },
-          });
-        }
-        return Response.json({ error: "Unauthorized" }, { status: 401 });
-      }
-    }
-
-    if (req.method === "GET" && url.pathname === "/view") {
-      return renderViewPage();
-    }
-
-    if (req.method === "GET" && url.pathname === "/view/screenshot") {
-      const res = await callComputer("/screenshot", { method: "GET" });
-      return Response.json(res);
-    }
-
-    if (req.method === "POST" && url.pathname === "/view/navigate") {
-      const body = (await req.json().catch(() => null)) as { url?: string } | null;
-      if (!body?.url) return Response.json({ error: "url is required" }, { status: 400 });
-      const res = await callComputer("/navigate", { body: { url: body.url }, timeoutMs: 65_000 });
-      return Response.json(res);
-    }
-
-    if (req.method === "GET" && url.pathname === "/view/control") {
-      const res = await callComputer("/control", { method: "GET" });
-      return Response.json(res);
-    }
-
-    if (req.method === "POST" && url.pathname === "/view/control/take") {
-      type ControlShape = {
-        holder?: string;
-        requested?: boolean;
-        requestId?: string;
-        request?: { id?: string; requestId?: string; status?: string };
-      };
-      const extractId = (c: ControlShape): string | undefined =>
-        c.request?.id ?? c.request?.requestId ?? c.requestId;
-
-      const current = (await callComputer("/control", { method: "GET" })) as ControlShape;
-      if (current.holder === "human") {
-        return Response.json(current);
-      }
-      let requestId =
-        current.requested && current.request?.status === "waiting"
-          ? extractId(current)
-          : undefined;
-      if (!requestId) {
-        const reqRes = (await callComputer("/control/request", {
-          body: { source: "manual", reason: "Owner taking control from /view" },
-        })) as ControlShape;
-        requestId = extractId(reqRes);
-      }
-      if (!requestId) {
-        return Response.json({ error: "Could not obtain control requestId" }, { status: 500 });
-      }
-      const taken = await callComputer("/control/take", {
-        body: { requestId, by: "owner" },
-      });
-      return Response.json(taken);
-    }
-
-    if (req.method === "POST" && url.pathname === "/view/control/release") {
-      const current = (await callComputer("/control", { method: "GET" })) as {
-        requestId?: string;
-        request?: { id?: string; requestId?: string };
-      };
-      const requestId = current.request?.id ?? current.request?.requestId ?? current.requestId;
-      if (!requestId) {
-        return Response.json(current);
-      }
-      const released = await callComputer("/control/release", {
-        body: { requestId },
-      });
-      return Response.json(released);
-    }
-
-    if (req.method === "POST" && url.pathname === "/view/click") {
-      const body = (await req.json().catch(() => null)) as { x?: number; y?: number } | null;
-      if (typeof body?.x !== "number" || typeof body?.y !== "number") {
-        return Response.json({ error: "x and y are required" }, { status: 400 });
-      }
-      try {
-        const res = await callComputer("/human/click", { body: { x: body.x, y: body.y } });
-        return Response.json(res);
-      } catch (err) {
-        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
-      }
-    }
-
-    if (req.method === "POST" && url.pathname === "/view/type") {
-      const body = (await req.json().catch(() => null)) as { text?: string } | null;
-      if (typeof body?.text !== "string") {
-        return Response.json({ error: "text is required" }, { status: 400 });
-      }
-      try {
-        const res = await callComputer("/human/type", { body: { text: body.text } });
-        return Response.json(res);
-      } catch (err) {
-        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
-      }
-    }
-
-    if (req.method === "POST" && url.pathname === "/view/key") {
-      const body = (await req.json().catch(() => null)) as { key?: string } | null;
-      if (typeof body?.key !== "string" || !body.key) {
-        return Response.json({ error: "key is required" }, { status: 400 });
-      }
-      try {
-        const res = await callComputer("/human/key", { body: { key: body.key } });
-        return Response.json(res);
-      } catch (err) {
-        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
-      }
-    }
-
-    if (req.method === "POST" && url.pathname === "/view/scroll") {
-      const body = (await req.json().catch(() => null)) as { deltaY?: number } | null;
-      if (typeof body?.deltaY !== "number") {
-        return Response.json({ error: "deltaY is required" }, { status: 400 });
-      }
-      try {
-        const res = await callComputer("/human/scroll", { body: { deltaY: body.deltaY } });
-        return Response.json(res);
-      } catch (err) {
-        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
-      }
     }
 
     if (
@@ -1338,7 +1118,8 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
       if (client && !client.redirect_uris.includes(redirectUri)) {
         return Response.json({ error: "invalid_request", error_description: "redirect_uri mismatch" }, { status: 400 });
       }
-      if (!safeEqual(token, MCP_TOKEN)) {
+      const userId = resolveTokenUser(token);
+      if (!userId) {
         return renderAuthorizePage({
           clientName: client?.client_name || clientId,
           clientId,
@@ -1346,12 +1127,13 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
           state,
           codeChallenge,
           codeChallengeMethod,
-          error: "Invalid OPENBOXY_MCP_TOKEN. Please try again.",
+          error: "Invalid API access token. Please try again.",
         });
       }
       const code = randomBytes(24).toString("base64url");
       authCodes.set(code, {
         clientId,
+        userId,
         redirectUri,
         codeChallenge,
         expiresAt: Date.now() + 5 * 60_000,
@@ -1391,14 +1173,15 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
         return Response.json({ error: "invalid_grant", error_description: "PKCE verification failed" }, { status: 400 });
       }
       return Response.json({
-        access_token: signAccessToken(record.clientId),
+        access_token: signAccessToken(record.clientId, record.userId),
         token_type: "Bearer",
         expires_in: 30 * 24 * 60 * 60,
       });
     }
 
     if (url.pathname === "/mcp") {
-      if (!authorized(req)) {
+      const userId = authorized(req);
+      if (!userId) {
         const origin = publicOrigin(req);
         return Response.json(
           { error: "Unauthorized" },
@@ -1414,7 +1197,7 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
-      const mcp = buildMcpServer();
+      const mcp = buildMcpServer(userId);
       transport.onclose = () => {
         void mcp.close().catch(() => {});
       };
@@ -1422,7 +1205,8 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
       return await transport.handleRequest(req);
     }
 
-    if (!uiAuthorized(req)) {
+    const uiUserId = uiAuthorized(req);
+    if (!uiUserId) {
       if (req.method === "GET" && (req.headers.get("accept") || "").includes("text/html")) {
         return new Response(null, {
           status: 302,
@@ -1432,83 +1216,155 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
-      if (srv.upgrade(req, { data: { upstream: null, pending: [], uiPath: url.pathname + url.search } })) {
-        return undefined as unknown as Response;
-      }
-      return Response.json({ error: "Expected WebSocket upgrade" }, { status: 400 });
+    if (req.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/view/terminal") {
+      const upgraded = srv.upgrade(req, { data: { userId: uiUserId } });
+      if (upgraded) return undefined;
+      return new Response("WebSocket upgrade failed", { status: 500 });
     }
 
-    const fwdHeaders = new Headers(req.headers);
-    fwdHeaders.set("host", "localhost:3001");
-    fwdHeaders.set("origin", "http://localhost:3001");
-    if (req.method === "GET") {
-      fwdHeaders.set("accept-encoding", "identity");
+    if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/view")) {
+      return renderViewPage(req, uiUserId, "browser");
     }
-    const upstream = await fetch(`${UI_URL}${url.pathname}${url.search}`, {
-      method: req.method,
-      headers: fwdHeaders,
-      body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
-      redirect: "manual",
-    });
-    const ct = upstream.headers.get("content-type") || "";
-    if (req.method === "GET" && upstream.ok && ct.includes("text/html")) {
-      const patched = injectOpenBoxyShell(await upstream.text(), req);
-      const headers = new Headers(upstream.headers);
-      headers.delete("content-length");
-      return new Response(patched, { status: upstream.status, headers });
+
+    if (req.method === "GET" && url.pathname === "/view/terminal") {
+      return renderViewPage(req, uiUserId, "terminal");
     }
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: upstream.headers,
-    });
+
+    if (req.method === "GET" && url.pathname === "/view/screenshot") {
+      try {
+        return Response.json(await sandbox.screenshot(uiUserId));
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+      }
+    }
+
+    if (req.method === "GET" && url.pathname === "/view/control") {
+      return Response.json(await sandbox.getControl(uiUserId));
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/control/take") {
+      return Response.json(await sandbox.setControl(uiUserId, "human"));
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/control/release") {
+      return Response.json(await sandbox.setControl(uiUserId, "agent"));
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/navigate") {
+      const body = (await req.json().catch(() => ({}))) as { url?: string };
+      if (!body.url) return Response.json({ error: "url is required" }, { status: 400 });
+      try {
+        return Response.json(await sandbox.navigate(uiUserId, body.url));
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/click") {
+      const body = (await req.json().catch(() => ({}))) as { x?: number; y?: number };
+      if (typeof body.x !== "number" || typeof body.y !== "number") {
+        return Response.json({ error: "x and y are required" }, { status: 400 });
+      }
+      try {
+        return Response.json(await sandbox.clickAt(uiUserId, body.x, body.y));
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/type") {
+      const body = (await req.json().catch(() => ({}))) as { text?: string };
+      if (typeof body.text !== "string") return Response.json({ error: "text is required" }, { status: 400 });
+      try {
+        return Response.json(await sandbox.typeText(uiUserId, body.text));
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/key") {
+      const body = (await req.json().catch(() => ({}))) as { key?: string };
+      if (!body.key) return Response.json({ error: "key is required" }, { status: 400 });
+      try {
+        return Response.json(await sandbox.pressKey(uiUserId, body.key));
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/view/scroll") {
+      const body = (await req.json().catch(() => ({}))) as { deltaY?: number };
+      if (typeof body.deltaY !== "number") return Response.json({ error: "deltaY is required" }, { status: 400 });
+      try {
+        return Response.json(await sandbox.scroll(uiUserId, body.deltaY));
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+      }
+    }
+
+    return new Response("Not Found", { status: 404 });
   },
   websocket: {
     open(ws) {
-      const upstream = ws.data.uiPath
-        ? new WebSocket(`${UI_URL.replace(/^http/i, "ws")}${ws.data.uiPath}`, {
-            headers: { host: "localhost:3001", origin: "http://localhost:3001" },
-          } as unknown as string[])
-        : new WebSocket(
-            `${COMPUTER_URL.replace(/^http/i, "ws")}/terminal?bot=${encodeURIComponent(DEFAULT_BOT_ID)}&token=${encodeURIComponent(COMPUTER_TOKEN)}`,
-          );
-      upstream.binaryType = "arraybuffer";
-      ws.data.upstream = upstream;
-      upstream.onopen = () => {
-        for (const msg of ws.data.pending) {
-          upstream.send(msg);
-        }
-        ws.data.pending = [];
-      };
-      upstream.onmessage = (e) => {
-        if (ws.readyState !== 1) return;
-        if (e.data instanceof ArrayBuffer) {
-          ws.send(new Uint8Array(e.data));
-        } else {
-          ws.send(String(e.data));
-        }
-      };
-      upstream.onclose = () => {
-        try { ws.close(); } catch {}
-      };
-      upstream.onerror = () => {
-        try { ws.close(); } catch {}
-      };
+      const { userId } = ws.data;
+      try {
+        const { workspaceDir, homeDir } = sandbox.getPathsSync(userId);
+        const proc = Bun.spawn(["bash", "-l"], {
+          cwd: workspaceDir,
+          env: {
+            ...process.env,
+            HOME: homeDir,
+            TERM: "xterm-256color",
+            OPENBOXY_USER: userId,
+            OPENBOXY_WORKSPACE: workspaceDir,
+          },
+          terminal: {
+            cols: 80,
+            rows: 24,
+            data(_term, data) {
+              try {
+                ws.sendBinary(data);
+              } catch {}
+            },
+            exit() {
+              try {
+                ws.close();
+              } catch {}
+            },
+          },
+        });
+        ws.data.proc = proc;
+      } catch (err) {
+        ws.send(JSON.stringify({ type: "error", error: err instanceof Error ? err.message : String(err) }));
+        ws.close();
+      }
     },
-    message(ws, msg) {
-      const upstream = ws.data.upstream;
-      if (!upstream) return;
-      if (upstream.readyState === WebSocket.OPEN) {
-        upstream.send(msg);
-      } else if (upstream.readyState === WebSocket.CONNECTING) {
-        ws.data.pending.push(msg);
+    message(ws, message) {
+      const proc = ws.data.proc;
+      if (!proc?.terminal) return;
+      if (typeof message === "string") {
+        try {
+          const parsed = JSON.parse(message) as { type?: string; data?: string; cols?: number; rows?: number };
+          if (parsed.type === "input" && typeof parsed.data === "string") {
+            proc.terminal.write(parsed.data);
+          } else if (
+            parsed.type === "resize" &&
+            typeof parsed.cols === "number" &&
+            typeof parsed.rows === "number"
+          ) {
+            proc.terminal.resize(Math.max(10, parsed.cols), Math.max(4, parsed.rows));
+          }
+        } catch {}
+      } else {
+        proc.terminal.write(message);
       }
     },
     close(ws) {
-      try { ws.data.upstream?.close(); } catch {}
-      ws.data.upstream = null;
+      try {
+        ws.data.proc?.kill();
+      } catch {}
     },
   },
 });
 
-console.log(`[openboxy-mcp] Listening on http://0.0.0.0:${server.port}/mcp (upstream ${COMPUTER_URL})`);
+console.log(`[openboxy-mcp] Listening on :${server.port} (single-container, users=${userTokens.size})`);

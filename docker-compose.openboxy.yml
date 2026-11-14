@@ -1,21 +1,4 @@
 services:
-  openboxy:
-    image: ${OPENBOXY_IMAGE:-ghcr.io/copilotkit/openbot:v1.0.2}
-    container_name: openboxy
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - EMBEDDED_POSTGRES=on
-      - OPENBOT_EDITION=personal
-      - OPENBOT_SINGLE_USER=true
-    ports:
-      - "${OPENBOXY_UI_BIND:-127.0.0.1:3001}:3001"
-    volumes:
-      - openboxy-postgres:/var/lib/postgresql
-      - openboxy-workspace:/workspace
-      - openboxy-profiles:/profiles
-
   openboxy-mcp:
     build:
       context: ./mcp-server
@@ -23,17 +6,16 @@ services:
     image: openboxy-mcp:local
     container_name: openboxy-mcp
     restart: unless-stopped
-    depends_on:
-      - openboxy
+    shm_size: "1gb"
     env_file:
       - .env
     environment:
-      - COMPUTER_URL=http://openboxy:4100
       - MCP_PORT=3100
+      - DATA_DIR=/data
     ports:
       - "${OPENBOXY_MCP_BIND:-127.0.0.1:3100}:3100"
+    volumes:
+      - openboxy-data:/data
 
 volumes:
-  openboxy-postgres:
-  openboxy-workspace:
-  openboxy-profiles:
+  openboxy-data:
