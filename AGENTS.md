@@ -59,10 +59,9 @@ When asked by a user to deploy OpenBoxy on a Linux server:
 
 5. **Configure Reverse Proxy / Auth (if public domain requested):**
    - Ask or inspect what the user already runs (Nginx, Caddy, Traefik, Cloudflare Tunnel, Tailscale, etc.) — do not assume Caddy.
-   - Default `OPENBOXY_UI_AUTH=token` protects `/`, `/view*`, and `/view/terminal` with `OPENBOXY_MCP_TOKEN` via `/login` (`HttpOnly` cookie), so no proxy-level Basic Auth is required.
+   - Default `OPENBOXY_UI_AUTH=token` protects `/`, `/view*`, `/view/terminal`, and all proxied OpenBot `/api/*` + WebSocket routes with `OPENBOXY_MCP_TOKEN` via `/login` (`HttpOnly` cookie), so no proxy-level Basic Auth is required.
    - If the user already enforces SSO/VPN/Basic Auth at the proxy/edge (Tailscale, Cloudflare Access, Authelia, Caddy `basicauth`), set `OPENBOXY_UI_AUTH=off` in `.env` so they are not prompted twice.
-   - Route `/`, `/login`, `/logout`, `/view*`, `/mcp*`, `/.well-known/oauth*`, `/.well-known/openid-configuration`, `/oauth/*` to `openboxy-mcp:3100` (with WebSocket upgrade support for `/view/terminal`).
-   - Route remaining paths to `openboxy:3001` with `Host: localhost:3001` and `Origin: http://localhost:3001`.
+   - Proxy all traffic (`/*`, with WebSocket upgrade support) to `openboxy-mcp:3100` (single upstream).
    - **Never** expose `agent-computer` port `4100` publicly.
 
 6. **Hand Off to User:**

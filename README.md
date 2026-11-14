@@ -79,12 +79,9 @@ OpenBoxy does **not** require Caddy or a separate Basic Auth password. Choose wh
 - **`OPENBOXY_UI_AUTH=token` (default):** Built-in `/login` page protected by your `OPENBOXY_MCP_TOKEN` (`HttpOnly` signed cookie). Works behind **any** reverse proxy (Nginx, Traefik, Caddy, Cloudflare Tunnel) with zero proxy-level auth setup.
 - **`OPENBOXY_UI_AUTH=off`:** Disables the built-in `/login` screen when your edge/VPN handles auth (e.g., **Tailscale Serve**, **Cloudflare Access**, **Authelia/Authentik**, or proxy Basic Auth).
 
-### Routing Rules (Any Reverse Proxy)
+### Routing Rules (Single Upstream: `openboxy-mcp:3100`)
 
-Route these paths to `openboxy-mcp:3100` (with WebSocket upgrade enabled for `/view/terminal`), and everything else to `openboxy:3001`:
-
-- `openboxy-mcp:3100`: `/`, `/login`, `/logout`, `/view*`, `/mcp*`, `/.well-known/oauth*`, `/.well-known/openid-configuration`, `/oauth/*`
-- `openboxy:3001`: all remaining paths (`/assets/*`, `/api/*`, etc.) with `Host: localhost:3001` and `Origin: http://localhost:3001`
+`openboxy-mcp:3100` proxies and gates all OpenBot UI/API/WebSocket routes behind `OPENBOXY_UI_AUTH`, so your reverse proxy only needs **one** upstream (`127.0.0.1:3100` or `openboxy-mcp:3100`) with WebSocket upgrade enabled:
 
 <details>
 <summary>Nginx example</summary>
@@ -94,27 +91,14 @@ server {
     listen 443 ssl http2;
     server_name mcp.example.com;
 
-    location = / { proxy_pass http://127.0.0.1:3100; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto $scheme; }
-    location ~ ^/(login|logout|mcp|oauth/|\.well-known/oauth|\.well-known/openid-configuration) {
-        proxy_pass http://127.0.0.1:3100;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-    location /view {
-        proxy_pass http://127.0.0.1:3100;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
     location / {
-        proxy_pass http://127.0.0.1:3001;
+        proxy_pass http://127.0.0.1:3100;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host localhost:3001;
-        proxy_set_header Origin http://localhost:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
     }
 }
 ```
@@ -126,18 +110,7 @@ server {
 
 ```caddyfile
 mcp.example.com {
-    @mcp_sidecar {
-        path / /login /logout /view* /mcp* /.well-known/oauth* /.well-known/openid-configuration /oauth/*
-    }
-    handle @mcp_sidecar {
-        reverse_proxy openboxy-mcp:3100
-    }
-    handle {
-        reverse_proxy openboxy:3001 {
-            header_up Host localhost:3001
-            header_up Origin http://localhost:3001
-        }
-    }
+    reverse_proxy openboxy-mcp:3100
 }
 ```
 

@@ -849,7 +849,7 @@ function buildMcpServer(): McpServer {
   return server;
 }
 
-const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer)[] }>({
+const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer)[]; uiPath?: string }>({
   port: PORT,
   idleTimeout: 255,
   async fetch(req, srv) {
@@ -1291,13 +1291,46 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
       return await transport.handleRequest(req);
     }
 
-    return Response.json({ error: "Not found" }, { status: 404 });
+    if (!uiAuthorized(req)) {
+      if (req.method === "GET" && (req.headers.get("accept") || "").includes("text/html")) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: `/login?next=${encodeURIComponent(url.pathname + url.search)}` },
+        });
+      }
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      if (srv.upgrade(req, { data: { upstream: null, pending: [], uiPath: url.pathname + url.search } })) {
+        return undefined as unknown as Response;
+      }
+      return Response.json({ error: "Expected WebSocket upgrade" }, { status: 400 });
+    }
+
+    const fwdHeaders = new Headers(req.headers);
+    fwdHeaders.set("host", "localhost:3001");
+    fwdHeaders.set("origin", "http://localhost:3001");
+    const upstream = await fetch(`${UI_URL}${url.pathname}${url.search}`, {
+      method: req.method,
+      headers: fwdHeaders,
+      body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
+      redirect: "manual",
+    });
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: upstream.headers,
+    });
   },
   websocket: {
     open(ws) {
-      const wsBase = COMPUTER_URL.replace(/^http/i, "ws");
-      const upstreamUrl = `${wsBase}/terminal?bot=${encodeURIComponent(DEFAULT_BOT_ID)}&token=${encodeURIComponent(COMPUTER_TOKEN)}`;
-      const upstream = new WebSocket(upstreamUrl);
+      const upstream = ws.data.uiPath
+        ? new WebSocket(`${UI_URL.replace(/^http/i, "ws")}${ws.data.uiPath}`, {
+            headers: { host: "localhost:3001", origin: "http://localhost:3001" },
+          } as unknown as string[])
+        : new WebSocket(
+            `${COMPUTER_URL.replace(/^http/i, "ws")}/terminal?bot=${encodeURIComponent(DEFAULT_BOT_ID)}&token=${encodeURIComponent(COMPUTER_TOKEN)}`,
+          );
       upstream.binaryType = "arraybuffer";
       ws.data.upstream = upstream;
       upstream.onopen = () => {
