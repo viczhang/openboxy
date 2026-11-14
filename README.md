@@ -1,6 +1,8 @@
 # OpenBoxy
 
-**OpenBoxy** is a self-hosted, single-container **Streamable HTTP MCP server** (`/mcp`) with a persistent **Playwright Chromium browser**, **PTY terminal**, and **workspace filesystem**—plus a live web UI (`/`, `/view`, `/view/terminal`) where you can watch or click **Take Control** to handle logins, 2FA, or CAPTCHAs by hand.
+> **Give your AI agents a real browser and terminal.**
+>
+> **OpenBoxy** equips chat-only AI agents with a persistent Chromium browser, workspace shell, and live human takeover over MCP—in a self-hosted, single-container **Streamable HTTP MCP server** (`/mcp`) with a live web UI (`/`, `/view`, `/view/terminal`) where you can watch or click **Take Control** to handle logins, 2FA, or CAPTCHAs by hand.
 
 Each API token maps to an isolated user sandbox (`/data/users/<userId>/profile`, `/workspace`, and `/home`), so multiple users (or multiple AI clients) can connect safely.
 
