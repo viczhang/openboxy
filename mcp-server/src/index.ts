@@ -200,7 +200,8 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
   <style>
     body { display: flex; flex-direction: column; height: 100vh; }
     header { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: var(--card); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-    .brand { color: var(--card-foreground); text-decoration: none; font-weight: 700; letter-spacing: -0.01em; padding-right: 4px; }
+    .brand { color: var(--card-foreground); text-decoration: none; font-size: 14px; font-weight: 600; letter-spacing: -0.05em; line-height: 1.25; padding: 6px 8px; border-radius: 8px; }
+    .brand:hover { background: var(--muted); }
     .tabs { display: flex; gap: 3px; background: var(--muted); padding: 3px; border-radius: 10px; border: 1px solid var(--border); }
     .tab { padding: 5px 12px; border-radius: 7px; border: 0; background: transparent; color: var(--muted-foreground); font-weight: 600; cursor: pointer; font-size: 13px; }
     .tab.active { background: var(--card); color: var(--card-foreground); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
@@ -981,7 +982,7 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
       if (!upstream.ok || !ct.includes("text/html")) {
         return upstream;
       }
-      const html = await upstream.text();
+      const html = (await upstream.text()).replace("<title>OpenBot</title>", "<title>OpenBoxy</title>");
       const mcpUrl = `${publicOrigin(req)}/mcp`;
       const mcpName = process.env.OPENBOXY_MCP_NAME?.trim() || "boxy";
       const opencodeJson = JSON.stringify(
@@ -1020,7 +1021,32 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
   </div>
   <pre id="openboxy-mcp-json" style="margin:0 0 8px 0;padding:8px 10px;background:var(--muted);border:1px solid var(--border);border-radius:10px;overflow:auto;font-size:11px;color:var(--card-foreground);">${escapeHtml(opencodeJson)}</pre>
   <div style="color:var(--muted-foreground);font-size:12px;">Then in OpenCode run <code style="background:var(--muted);color:var(--card-foreground);padding:1px 5px;border-radius:4px;">/mcps</code>, select <strong style="color:var(--card-foreground);">${escapeHtml(mcpName)}</strong>, and sign in with your <code style="background:var(--muted);color:var(--card-foreground);padding:1px 5px;border-radius:4px;">OPENBOXY_MCP_TOKEN</code>.</div>
-</div>`;
+</div>
+<script>
+  (function () {
+    function rebrand() {
+      if (document.title.indexOf("OpenBot") !== -1) {
+        document.title = document.title.replace(/\\bOpenBot\\b/g, "OpenBoxy");
+      }
+      var marks = document.querySelectorAll('[data-slot="trademark"]');
+      for (var i = 0; i < marks.length; i++) {
+        var sup = marks[i];
+        var parent = sup.parentElement;
+        sup.remove();
+        if (parent) {
+          for (var j = 0; j < parent.childNodes.length; j++) {
+            var n = parent.childNodes[j];
+            if (n.nodeType === 3 && n.nodeValue && n.nodeValue.indexOf("OpenBot") !== -1) {
+              n.nodeValue = n.nodeValue.replace(/\\bOpenBot\\b/g, "OpenBoxy");
+            }
+          }
+        }
+      }
+    }
+    rebrand();
+    new MutationObserver(rebrand).observe(document.documentElement, { childList: true, subtree: true });
+  })();
+</script>`;
       const patched = html.includes("</body>")
         ? html.replace("</body>", `${pill}</body>`)
         : `${html}${pill}`;
