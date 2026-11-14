@@ -942,20 +942,29 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
         null,
         2,
       );
+      const agentPrompt = `Add the remote Streamable HTTP MCP server "${mcpName}" at ${mcpUrl} (with OAuth) to my MCP client config, then tell me how to finish signing in.`;
       const pill = `<div id="openboxy-nav-pill" style="position:fixed;bottom:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;background:rgba(15,23,42,0.94);border:1px solid #334155;border-radius:999px;padding:6px 10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);font-family:system-ui,-apple-system,sans-serif;font-size:12px;">
   <a href="/view" style="color:#f8fafc;text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:#2563eb;">Live Browser</a>
   <a href="/view/terminal" style="color:#e2e8f0;text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:#334155;">Terminal</a>
   <button type="button" onclick="var m=document.getElementById('openboxy-mcp-modal');m.style.display=m.style.display==='block'?'none':'block';" style="color:#e2e8f0;border:0;cursor:pointer;font-weight:600;padding:4px 10px;border-radius:999px;background:#0f766e;font-size:12px;">MCP Setup</button>
 </div>
-<div id="openboxy-mcp-modal" style="display:none;position:fixed;bottom:58px;right:14px;z-index:99999;width:min(440px,calc(100vw - 28px));background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:12px;padding:14px 16px;box-shadow:0 16px 40px rgba(0,0,0,0.55);font-family:system-ui,-apple-system,sans-serif;font-size:13px;line-height:1.45;">
+<div id="openboxy-mcp-modal" style="display:none;position:fixed;bottom:58px;right:14px;z-index:99999;width:min(480px,calc(100vw - 28px));max-height:80vh;overflow:auto;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:12px;padding:14px 16px;box-shadow:0 16px 40px rgba(0,0,0,0.55);font-family:system-ui,-apple-system,sans-serif;font-size:13px;line-height:1.45;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
     <strong style="font-size:14px;color:#f8fafc;">Connect MCP (${escapeHtml(mcpName)})</strong>
     <button type="button" onclick="document.getElementById('openboxy-mcp-modal').style.display='none';" style="background:transparent;border:0;color:#94a3b8;cursor:pointer;font-size:16px;line-height:1;">&times;</button>
   </div>
-  <div style="margin-bottom:8px;color:#cbd5e1;">Endpoint: <code style="background:#1e293b;padding:2px 6px;border-radius:4px;color:#93c5fd;">${escapeHtml(mcpUrl)}</code></div>
-  <div style="margin-bottom:6px;color:#cbd5e1;">1. Add to <code style="background:#1e293b;padding:1px 5px;border-radius:4px;">~/.config/opencode/opencode.jsonc</code> (or Claude/Cursor):</div>
-  <pre style="margin:0 0 8px 0;padding:8px 10px;background:#020617;border:1px solid #1e293b;border-radius:8px;overflow:auto;font-size:11px;color:#e2e8f0;">${escapeHtml(opencodeJson)}</pre>
-  <div style="color:#94a3b8;font-size:12px;">2. In OpenCode, run <code style="background:#1e293b;padding:1px 5px;border-radius:4px;color:#e2e8f0;">/mcps</code>, select <strong style="color:#e2e8f0;">${escapeHtml(mcpName)}</strong>, and sign in with your <code style="background:#1e293b;padding:1px 5px;border-radius:4px;">OPENBOXY_MCP_TOKEN</code>.</div>
+  <div style="margin-bottom:10px;color:#cbd5e1;">Endpoint: <code style="background:#1e293b;padding:2px 6px;border-radius:4px;color:#93c5fd;">${escapeHtml(mcpUrl)}</code></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:#cbd5e1;">
+    <span><strong>Option 1 — Paste to an AI Agent</strong> (OpenCode, Claude Code, Cursor, Codex):</span>
+    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-agent-prompt').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:#334155;color:#f8fafc;border:0;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;">Copy</button>
+  </div>
+  <pre id="openboxy-agent-prompt" style="margin:0 0 10px 0;padding:8px 10px;background:#020617;border:1px solid #1e293b;border-radius:8px;white-space:pre-wrap;word-break:break-word;font-size:11px;color:#a7f3d0;">${escapeHtml(agentPrompt)}</pre>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:#cbd5e1;">
+    <span><strong>Option 2 — Manual JSON</strong> (<code style="background:#1e293b;padding:1px 5px;border-radius:4px;">~/.config/opencode/opencode.jsonc</code>):</span>
+    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-mcp-json').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:#334155;color:#f8fafc;border:0;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;">Copy</button>
+  </div>
+  <pre id="openboxy-mcp-json" style="margin:0 0 8px 0;padding:8px 10px;background:#020617;border:1px solid #1e293b;border-radius:8px;overflow:auto;font-size:11px;color:#e2e8f0;">${escapeHtml(opencodeJson)}</pre>
+  <div style="color:#94a3b8;font-size:12px;">Then in OpenCode run <code style="background:#1e293b;padding:1px 5px;border-radius:4px;color:#e2e8f0;">/mcps</code>, select <strong style="color:#e2e8f0;">${escapeHtml(mcpName)}</strong>, and sign in with your <code style="background:#1e293b;padding:1px 5px;border-radius:4px;">OPENBOXY_MCP_TOKEN</code>.</div>
 </div>`;
       const patched = html.includes("</body>")
         ? html.replace("</body>", `${pill}</body>`)
