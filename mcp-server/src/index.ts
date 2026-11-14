@@ -77,6 +77,56 @@ function safeNextPath(raw: string | null): string {
   return raw;
 }
 
+const OPENBOXY_THEME_HEAD = `
+  <script>
+    (function () {
+      try {
+        var dark = window.localStorage.getItem("openbot-theme") === "dark";
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      } catch {}
+    })();
+  </script>
+  <style>
+    :root {
+      --background: oklch(0.983 0.003 286.4);
+      --card: oklch(1 0 0);
+      --card-foreground: oklch(0.108 0.015 220.9);
+      --primary: oklch(0.108 0.015 220.9);
+      --primary-foreground: oklch(1 0 0);
+      --muted: oklch(0.956 0.005 286.3);
+      --muted-foreground: oklch(0.506 0.013 285.9);
+      --border: oklch(0.894 0.014 286.1);
+      --destructive: oklch(0.577 0.245 27.325);
+    }
+    .dark {
+      --background: oklch(0.182 0.023 296.6);
+      --card: oklch(0.212 0.028 297.1);
+      --card-foreground: oklch(0.956 0.005 286.3);
+      --primary: oklch(0.956 0.005 286.3);
+      --primary-foreground: oklch(0.108 0.015 220.9);
+      --muted: oklch(0.253 0.032 297.6);
+      --muted-foreground: oklch(0.69 0.017 285.9);
+      --border: oklch(0.28 0.035 298.6);
+      --destructive: oklch(0.704 0.191 22.216);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--background); color: var(--card-foreground); }
+    .obx-center { display: grid; place-items: center; min-height: 100vh; padding: 16px; }
+    .obx-card { background: var(--card); color: var(--card-foreground); border: 1px solid var(--border); border-radius: 14px; padding: 28px; width: 100%; max-width: 410px; box-shadow: 0 12px 32px rgba(0,0,0,.08); }
+    .dark .obx-card { box-shadow: 0 20px 44px rgba(0,0,0,.4); }
+    .obx-card h1 { font-size: 20px; font-weight: 700; margin: 0 0 8px; letter-spacing: -0.01em; }
+    .obx-card p { font-size: 14px; color: var(--muted-foreground); margin: 0 0 18px; line-height: 1.5; }
+    .obx-card label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+    .obx-card code { background: var(--muted); color: var(--card-foreground); padding: 2px 6px; border-radius: 6px; font-size: 12px; }
+    .obx-card input[type="password"] { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--background); color: var(--card-foreground); font-size: 14px; margin-bottom: 16px; outline: none; }
+    .obx-card input[type="password"]:focus { border-color: var(--primary); }
+    .obx-card button { width: 100%; padding: 10px 14px; border-radius: 10px; border: 0; background: var(--primary); color: var(--primary-foreground); font-weight: 600; font-size: 14px; cursor: pointer; }
+    .obx-card button:hover { opacity: 0.9; }
+    .obx-err { background: color-mix(in oklch, var(--destructive) 14%, transparent); color: var(--destructive); border: 1px solid color-mix(in oklch, var(--destructive) 30%, transparent); padding: 10px 12px; border-radius: 10px; font-size: 13px; margin-bottom: 14px; }
+  </style>
+`;
+
 function renderLoginPage(nextPath: string, error?: string): Response {
   const html = `<!doctype html>
 <html lang="en">
@@ -84,23 +134,13 @@ function renderLoginPage(nextPath: string, error?: string): Response {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenBoxy Sign In</title>
-  <style>
-    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; margin: 0; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 28px; width: 100%; max-width: 400px; box-shadow: 0 20px 40px rgba(0,0,0,.4); }
-    h1 { font-size: 20px; margin: 0 0 8px; }
-    p { font-size: 14px; color: #94a3b8; margin: 0 0 18px; line-height: 1.5; }
-    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-    input[type="password"] { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; margin-bottom: 16px; }
-    button { width: 100%; padding: 11px; border-radius: 8px; border: 0; background: #3b82f6; color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; }
-    button:hover { background: #2563eb; }
-    .err { background: #7f1d1d; color: #fecaca; padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
-  </style>
+  ${OPENBOXY_THEME_HEAD}
 </head>
-<body>
-  <div class="card">
+<body class="obx-center">
+  <div class="obx-card">
     <h1>OpenBoxy</h1>
     <p>Enter your <code>OPENBOXY_MCP_TOKEN</code> to access the live browser, terminal, and UI.</p>
-    ${error ? `<div class="err">${escapeHtml(error)}</div>` : ""}
+    ${error ? `<div class="obx-err">${escapeHtml(error)}</div>` : ""}
     <form method="POST" action="/login">
       <input type="hidden" name="next" value="${escapeHtml(nextPath)}" />
       <label for="token">Access Token</label>
@@ -154,35 +194,36 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenBoxy Live View</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+  ${OPENBOXY_THEME_HEAD}
   <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; flex-direction: column; height: 100vh; }
-    header { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: #1e293b; border-bottom: 1px solid #334155; flex-wrap: wrap; }
-    .tabs { display: flex; gap: 4px; background: #0f172a; padding: 3px; border-radius: 8px; border: 1px solid #334155; }
-    .tab { padding: 5px 12px; border-radius: 6px; border: 0; background: transparent; color: #94a3b8; font-weight: 600; cursor: pointer; font-size: 13px; }
-    .tab.active { background: #334155; color: #f8fafc; }
+    body { display: flex; flex-direction: column; height: 100vh; }
+    header { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: var(--card); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    .brand { color: var(--card-foreground); text-decoration: none; font-weight: 700; letter-spacing: -0.01em; padding-right: 4px; }
+    .tabs { display: flex; gap: 3px; background: var(--muted); padding: 3px; border-radius: 10px; border: 1px solid var(--border); }
+    .tab { padding: 5px 12px; border-radius: 7px; border: 0; background: transparent; color: var(--muted-foreground); font-weight: 600; cursor: pointer; font-size: 13px; }
+    .tab.active { background: var(--card); color: var(--card-foreground); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
     header form { display: flex; flex: 1; gap: 8px; min-width: 220px; }
-    input[type="text"] { flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; }
-    button { padding: 8px 14px; border-radius: 8px; border: 0; background: #3b82f6; color: #fff; font-weight: 600; cursor: pointer; font-size: 13px; white-space: nowrap; }
-    button:hover { background: #2563eb; }
-    button.sec { background: #334155; }
-    button.sec:hover { background: #475569; }
-    button.take { background: #d97706; }
-    button.take:hover { background: #b45309; }
-    button.release { background: #16a34a; }
-    button.release:hover { background: #15803d; }
-    .meta { font-size: 12px; color: #94a3b8; white-space: nowrap; }
+    input[type="text"] { flex: 1; padding: 7px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--background); color: var(--card-foreground); font-size: 13px; outline: none; }
+    input[type="text"]:focus { border-color: var(--primary); }
+    button { padding: 7px 13px; border-radius: 10px; border: 1px solid transparent; background: var(--primary); color: var(--primary-foreground); font-weight: 600; cursor: pointer; font-size: 13px; white-space: nowrap; }
+    button:hover { opacity: 0.9; }
+    button.sec { background: var(--muted); color: var(--card-foreground); border-color: var(--border); }
+    button.sec:hover { opacity: 0.85; }
+    button.take { background: #d97706; color: #fff; }
+    button.release { background: #16a34a; color: #fff; }
+    .meta { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
     main { flex: 1; display: grid; place-items: center; overflow: auto; padding: 12px; position: relative; }
-    img { max-width: 100%; max-height: calc(100vh - 76px); border: 2px solid #334155; border-radius: 8px; background: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.45); outline: none; }
+    img { max-width: 100%; max-height: calc(100vh - 76px); border: 2px solid var(--border); border-radius: 12px; background: #fff; box-shadow: 0 10px 28px rgba(0,0,0,.12); outline: none; }
+    .dark img { box-shadow: 0 12px 32px rgba(0,0,0,.45); }
     img.controlling { border-color: #22c55e; cursor: crosshair; }
-    #termWrap { display: none; width: 100%; height: 100%; background: #020617; border: 2px solid #334155; border-radius: 8px; padding: 8px; overflow: hidden; }
+    #termWrap { display: none; width: 100%; height: 100%; background: var(--card); border: 2px solid var(--border); border-radius: 12px; padding: 10px; overflow: hidden; }
     #termWrap.controlling { border-color: #22c55e; }
     #terminal { width: 100%; height: 100%; }
   </style>
 </head>
 <body>
   <header>
-    <a href="/" style="color:#f8fafc;text-decoration:none;font-weight:700;">OpenBoxy</a>
+    <a class="brand" href="/">OpenBoxy</a>
     <div class="tabs">
       <button class="tab active" id="tabBrowser" type="button">Browser</button>
       <button class="tab" id="tabTerminal" type="button">Terminal</button>
@@ -193,6 +234,7 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
     </form>
     <button class="take" id="controlBtn" type="button">Take Control</button>
     <button class="sec" id="refreshBtn" type="button">Refresh</button>
+    <button class="sec" id="themeBtn" type="button" title="Toggle light/dark mode"></button>
     <span class="meta" id="status">Loading…</span>
   </header>
   <main>
@@ -255,6 +297,28 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
       }
     }
 
+    const themeBtn = document.getElementById("themeBtn");
+    function getTermTheme(isDark) {
+      return isDark
+        ? { background: "#161221", foreground: "#f1f5f9", cursor: "#f1f5f9" }
+        : { background: "#ffffff", foreground: "#0f172a", cursor: "#0f172a", selectionBackground: "#cbd5e1" };
+    }
+    function applyTheme(isDark) {
+      document.documentElement.classList.toggle("dark", isDark);
+      document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+      themeBtn.textContent = isDark ? "Light" : "Dark";
+      if (term) term.options.theme = getTermTheme(isDark);
+    }
+    applyTheme(document.documentElement.classList.contains("dark"));
+    themeBtn.addEventListener("click", () => {
+      const next = !document.documentElement.classList.contains("dark");
+      try { window.localStorage.setItem("openbot-theme", next ? "dark" : "light"); } catch {}
+      applyTheme(next);
+    });
+    window.addEventListener("storage", (e) => {
+      if (e.key === "openbot-theme") applyTheme(e.newValue === "dark");
+    });
+
     function connectTerminal() {
       if (!window.Terminal) {
         statusEl.textContent = "xterm.js failed to load";
@@ -265,7 +329,7 @@ function renderViewPage(initialTab: "browser" | "terminal" = "browser"): Respons
           cursorBlink: true,
           fontSize: 13,
           fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-          theme: { background: "#020617", foreground: "#e2e8f0" },
+          theme: getTermTheme(document.documentElement.classList.contains("dark")),
         });
         fitAddon = new window.FitAddon.FitAddon();
         term.loadAddon(fitAddon);
@@ -468,24 +532,13 @@ function renderAuthorizePage(params: {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Authorize OpenBoxy MCP</title>
-  <style>
-    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 16px; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 28px; max-width: 420px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,.4); }
-    h1 { margin: 0 0 8px; font-size: 20px; }
-    p { margin: 0 0 18px; color: #94a3b8; font-size: 14px; line-height: 1.5; }
-    code { background: #0f172a; padding: 2px 6px; border-radius: 4px; font-size: 12px; color: #38bdf8; }
-    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-    input[type="password"] { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; margin-bottom: 16px; }
-    button { width: 100%; padding: 11px; border-radius: 8px; border: 0; background: #3b82f6; color: white; font-size: 14px; font-weight: 600; cursor: pointer; }
-    button:hover { background: #2563eb; }
-    .err { background: #7f1d1d; color: #fecaca; padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
-  </style>
+  ${OPENBOXY_THEME_HEAD}
 </head>
-<body>
-  <div class="card">
+<body class="obx-center">
+  <div class="obx-card">
     <h1>Connect to OpenBoxy</h1>
     <p><strong>${escapeHtml(params.clientName)}</strong> is requesting MCP access to your OpenBoxy terminal and browser.<br/>Redirect: <code>${escapeHtml(params.redirectUri)}</code></p>
-    ${params.error ? `<div class="err">${escapeHtml(params.error)}</div>` : ""}
+    ${params.error ? `<div class="obx-err">${escapeHtml(params.error)}</div>` : ""}
     <form method="POST" action="/oauth/authorize">
       <input type="hidden" name="client_id" value="${escapeHtml(params.clientId)}" />
       <input type="hidden" name="redirect_uri" value="${escapeHtml(params.redirectUri)}" />
@@ -943,28 +996,28 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
         2,
       );
       const agentPrompt = `Add the remote Streamable HTTP MCP server "${mcpName}" at ${mcpUrl} (with OAuth) to my MCP client config, then tell me how to finish signing in.`;
-      const pill = `<div id="openboxy-nav-pill" style="position:fixed;bottom:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;background:rgba(15,23,42,0.94);border:1px solid #334155;border-radius:999px;padding:6px 10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);font-family:system-ui,-apple-system,sans-serif;font-size:12px;">
-  <a href="/view" style="color:#f8fafc;text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:#2563eb;">Live Browser</a>
-  <a href="/view/terminal" style="color:#e2e8f0;text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:#334155;">Terminal</a>
-  <button type="button" onclick="var m=document.getElementById('openboxy-mcp-modal');m.style.display=m.style.display==='block'?'none':'block';" style="color:#e2e8f0;border:0;cursor:pointer;font-weight:600;padding:4px 10px;border-radius:999px;background:#0f766e;font-size:12px;">MCP Setup</button>
+      const pill = `<div id="openboxy-nav-pill" style="position:fixed;bottom:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:999px;padding:5px 8px;box-shadow:0 8px 24px rgba(0,0,0,0.14);font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;font-size:12px;">
+  <a href="/view" style="color:var(--primary-foreground);text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--primary);">Live Browser</a>
+  <a href="/view/terminal" style="color:var(--card-foreground);text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--muted);">Terminal</a>
+  <button type="button" onclick="var m=document.getElementById('openboxy-mcp-modal');m.style.display=m.style.display==='block'?'none':'block';" style="color:var(--card-foreground);border:1px solid var(--border);cursor:pointer;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--background);font-size:12px;">MCP Setup</button>
 </div>
-<div id="openboxy-mcp-modal" style="display:none;position:fixed;bottom:58px;right:14px;z-index:99999;width:min(480px,calc(100vw - 28px));max-height:80vh;overflow:auto;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:12px;padding:14px 16px;box-shadow:0 16px 40px rgba(0,0,0,0.55);font-family:system-ui,-apple-system,sans-serif;font-size:13px;line-height:1.45;">
+<div id="openboxy-mcp-modal" style="display:none;position:fixed;bottom:56px;right:14px;z-index:99999;width:min(480px,calc(100vw - 28px));max-height:80vh;overflow:auto;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:14px;padding:16px 18px;box-shadow:0 16px 40px rgba(0,0,0,0.22);font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;font-size:13px;line-height:1.45;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-    <strong style="font-size:14px;color:#f8fafc;">Connect MCP (${escapeHtml(mcpName)})</strong>
-    <button type="button" onclick="document.getElementById('openboxy-mcp-modal').style.display='none';" style="background:transparent;border:0;color:#94a3b8;cursor:pointer;font-size:16px;line-height:1;">&times;</button>
+    <strong style="font-size:14px;color:var(--card-foreground);">Connect MCP (${escapeHtml(mcpName)})</strong>
+    <button type="button" onclick="document.getElementById('openboxy-mcp-modal').style.display='none';" style="background:transparent;border:0;color:var(--muted-foreground);cursor:pointer;font-size:18px;line-height:1;">&times;</button>
   </div>
-  <div style="margin-bottom:10px;color:#cbd5e1;">Endpoint: <code style="background:#1e293b;padding:2px 6px;border-radius:4px;color:#93c5fd;">${escapeHtml(mcpUrl)}</code></div>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:#cbd5e1;">
+  <div style="margin-bottom:10px;color:var(--muted-foreground);">Endpoint: <code style="background:var(--muted);color:var(--card-foreground);padding:2px 6px;border-radius:6px;">${escapeHtml(mcpUrl)}</code></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:var(--card-foreground);">
     <span><strong>Option 1 — Paste to an AI Agent</strong> (OpenCode, Claude Code, Cursor, Codex):</span>
-    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-agent-prompt').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:#334155;color:#f8fafc;border:0;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;">Copy</button>
+    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-agent-prompt').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:var(--muted);color:var(--card-foreground);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;font-weight:600;">Copy</button>
   </div>
-  <pre id="openboxy-agent-prompt" style="margin:0 0 10px 0;padding:8px 10px;background:#020617;border:1px solid #1e293b;border-radius:8px;white-space:pre-wrap;word-break:break-word;font-size:11px;color:#a7f3d0;">${escapeHtml(agentPrompt)}</pre>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:#cbd5e1;">
-    <span><strong>Option 2 — Manual JSON</strong> (<code style="background:#1e293b;padding:1px 5px;border-radius:4px;">~/.config/opencode/opencode.jsonc</code>):</span>
-    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-mcp-json').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:#334155;color:#f8fafc;border:0;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;">Copy</button>
+  <pre id="openboxy-agent-prompt" style="margin:0 0 10px 0;padding:8px 10px;background:var(--muted);border:1px solid var(--border);border-radius:10px;white-space:pre-wrap;word-break:break-word;font-size:11px;color:var(--card-foreground);">${escapeHtml(agentPrompt)}</pre>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:var(--card-foreground);">
+    <span><strong>Option 2 — Manual JSON</strong> (<code style="background:var(--muted);padding:1px 5px;border-radius:4px;">~/.config/opencode/opencode.jsonc</code>):</span>
+    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-mcp-json').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:var(--muted);color:var(--card-foreground);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;font-weight:600;">Copy</button>
   </div>
-  <pre id="openboxy-mcp-json" style="margin:0 0 8px 0;padding:8px 10px;background:#020617;border:1px solid #1e293b;border-radius:8px;overflow:auto;font-size:11px;color:#e2e8f0;">${escapeHtml(opencodeJson)}</pre>
-  <div style="color:#94a3b8;font-size:12px;">Then in OpenCode run <code style="background:#1e293b;padding:1px 5px;border-radius:4px;color:#e2e8f0;">/mcps</code>, select <strong style="color:#e2e8f0;">${escapeHtml(mcpName)}</strong>, and sign in with your <code style="background:#1e293b;padding:1px 5px;border-radius:4px;">OPENBOXY_MCP_TOKEN</code>.</div>
+  <pre id="openboxy-mcp-json" style="margin:0 0 8px 0;padding:8px 10px;background:var(--muted);border:1px solid var(--border);border-radius:10px;overflow:auto;font-size:11px;color:var(--card-foreground);">${escapeHtml(opencodeJson)}</pre>
+  <div style="color:var(--muted-foreground);font-size:12px;">Then in OpenCode run <code style="background:var(--muted);color:var(--card-foreground);padding:1px 5px;border-radius:4px;">/mcps</code>, select <strong style="color:var(--card-foreground);">${escapeHtml(mcpName)}</strong>, and sign in with your <code style="background:var(--muted);color:var(--card-foreground);padding:1px 5px;border-radius:4px;">OPENBOXY_MCP_TOKEN</code>.</div>
 </div>`;
       const patched = html.includes("</body>")
         ? html.replace("</body>", `${pill}</body>`)
