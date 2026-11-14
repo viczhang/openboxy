@@ -33,7 +33,7 @@ This repo includes [`AGENTS.md`](./AGENTS.md) so coding agents (OpenCode, Claude
 
 Paste this prompt to an agent running on your target machine:
 
-> Clone `https://github.com/viczhang/openboxy`, read `AGENTS.md` and `README.md`, and deploy OpenBoxy on this server. Generate fresh secrets in `.env`, build/start the containers (building `openbot-local` first if ARM64), verify `/health` and `/mcp`, and configure HTTPS reverse proxy for `<your-domain>` with Basic Auth on `/` and `/view*`.
+> Clone `https://github.com/viczhang/openboxy`, read `AGENTS.md` and `README.md`, and deploy OpenBoxy on this server. Generate fresh secrets in `.env`, build/start the containers (building `openbot-local` first if ARM64), verify `/health` and `/mcp`, and configure HTTPS reverse proxy for `<your-domain>` (using my preferred proxy/auth such as Nginx, Caddy, Traefik, Cloudflare Tunnel, or Tailscale).
 
 ---
 
@@ -70,34 +70,69 @@ Paste this prompt to an agent running on your target machine:
 
 ---
 
-## Reverse Proxy (HTTPS with Caddy)
+## Reverse Proxy & Authentication (Proxy-Agnostic)
 
-Expose `/mcp` and OAuth endpoints publicly (they enforce `OPENBOXY_MCP_TOKEN` / OAuth), and protect the web UI (`/`, `/view*`) with Basic Auth:
+OpenBoxy does **not** require Caddy or a separate Basic Auth password. Choose whichever auth model fits your setup:
+
+### Authentication Options (`OPENBOXY_UI_AUTH`)
+
+- **`OPENBOXY_UI_AUTH=token` (default):** Built-in `/login` page protected by your `OPENBOXY_MCP_TOKEN` (`HttpOnly` signed cookie). Works behind **any** reverse proxy (Nginx, Traefik, Caddy, Cloudflare Tunnel) with zero proxy-level auth setup.
+- **`OPENBOXY_UI_AUTH=off`:** Disables the built-in `/login` screen when your edge/VPN handles auth (e.g., **Tailscale Serve**, **Cloudflare Access**, **Authelia/Authentik**, or proxy Basic Auth).
+
+### Routing Rules (Any Reverse Proxy)
+
+Route these paths to `openboxy-mcp:3100` (with WebSocket upgrade enabled for `/view/terminal`), and everything else to `openboxy:3001`:
+
+- `openboxy-mcp:3100`: `/`, `/login`, `/logout`, `/view*`, `/mcp*`, `/.well-known/oauth*`, `/.well-known/openid-configuration`, `/oauth/*`
+- `openboxy:3001`: all remaining paths (`/assets/*`, `/api/*`, etc.) with `Host: localhost:3001` and `Origin: http://localhost:3001`
+
+<details>
+<summary>Nginx example</summary>
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name mcp.example.com;
+
+    location = / { proxy_pass http://127.0.0.1:3100; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto $scheme; }
+    location ~ ^/(login|logout|mcp|oauth/|\.well-known/oauth|\.well-known/openid-configuration) {
+        proxy_pass http://127.0.0.1:3100;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location /view {
+        proxy_pass http://127.0.0.1:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host localhost:3001;
+        proxy_set_header Origin http://localhost:3001;
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Caddy example</summary>
 
 ```caddyfile
 mcp.example.com {
-    @mcp_public {
-        path /mcp* /.well-known/oauth* /.well-known/openid-configuration /oauth/*
+    @mcp_sidecar {
+        path / /login /logout /view* /mcp* /.well-known/oauth* /.well-known/openid-configuration /oauth/*
     }
-    handle @mcp_public {
-        reverse_proxy openboxy-mcp:3100
-    }
-    handle /view* {
-        basicauth * {
-            admin $2a$14$YOUR_BCRYPT_HASH
-        }
-        reverse_proxy openboxy-mcp:3100
-    }
-    handle / {
-        basicauth * {
-            admin $2a$14$YOUR_BCRYPT_HASH
-        }
+    handle @mcp_sidecar {
         reverse_proxy openboxy-mcp:3100
     }
     handle {
-        basicauth * {
-            admin $2a$14$YOUR_BCRYPT_HASH
-        }
         reverse_proxy openboxy:3001 {
             header_up Host localhost:3001
             header_up Origin http://localhost:3001
@@ -105,6 +140,8 @@ mcp.example.com {
     }
 }
 ```
+
+</details>
 
 ---
 

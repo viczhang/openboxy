@@ -10,6 +10,7 @@ const COMPUTER_TOKEN = (process.env.COMPUTER_TOKEN || "").trim();
 const MCP_TOKEN = (process.env.OPENBOXY_MCP_TOKEN || "").trim();
 const DEFAULT_BOT_ID = (process.env.OPENBOXY_BOT_ID || "default").trim();
 const PUBLIC_URL = (process.env.OPENBOXY_PUBLIC_URL || "").replace(/\/+$/, "");
+const UI_AUTH = (process.env.OPENBOXY_UI_AUTH || "token").trim().toLowerCase();
 
 if (!COMPUTER_TOKEN) {
   console.error("[openboxy-mcp] COMPUTER_TOKEN must be set.");
@@ -50,6 +51,66 @@ function authorized(req: Request): boolean {
   const offered = auth.replace(/^Bearer\s+/i, "").trim();
   if (!offered) return false;
   return verifyAccessToken(offered);
+}
+
+function readCookie(req: Request, name: string): string {
+  const raw = req.headers.get("cookie") || "";
+  for (const part of raw.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx === -1) continue;
+    if (part.slice(0, idx).trim() === name) {
+      return decodeURIComponent(part.slice(idx + 1).trim());
+    }
+  }
+  return "";
+}
+
+function uiAuthorized(req: Request): boolean {
+  if (UI_AUTH === "off" || UI_AUTH === "none" || UI_AUTH === "false") return true;
+  if (authorized(req)) return true;
+  const cookie = readCookie(req, "openboxy_ui");
+  return cookie ? verifyAccessToken(cookie) : false;
+}
+
+function safeNextPath(raw: string | null): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/";
+  return raw;
+}
+
+function renderLoginPage(nextPath: string, error?: string): Response {
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenBoxy Sign In</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; margin: 0; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 28px; width: 100%; max-width: 400px; box-shadow: 0 20px 40px rgba(0,0,0,.4); }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p { font-size: 14px; color: #94a3b8; margin: 0 0 18px; line-height: 1.5; }
+    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+    input[type="password"] { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; margin-bottom: 16px; }
+    button { width: 100%; padding: 11px; border-radius: 8px; border: 0; background: #3b82f6; color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; }
+    button:hover { background: #2563eb; }
+    .err { background: #7f1d1d; color: #fecaca; padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>OpenBoxy</h1>
+    <p>Enter your <code>OPENBOXY_MCP_TOKEN</code> to access the live browser, terminal, and UI.</p>
+    ${error ? `<div class="err">${escapeHtml(error)}</div>` : ""}
+    <form method="POST" action="/login">
+      <input type="hidden" name="next" value="${escapeHtml(nextPath)}" />
+      <label for="token">Access Token</label>
+      <input id="token" name="token" type="password" autocomplete="current-password" required autofocus placeholder="Paste OPENBOXY_MCP_TOKEN" />
+      <button type="submit">Sign In</button>
+    </form>
+  </div>
+</body>
+</html>`;
+  return new Response(html, { status: error ? 401 : 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
 }
 
 function publicOrigin(req: Request): string {
@@ -795,6 +856,15 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
     const url = new URL(req.url);
 
     if (url.pathname === "/view/terminal") {
+      if (!uiAuthorized(req)) {
+        if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+          return Response.json({ error: "Unauthorized" }, { status: 401 });
+        }
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "/login?next=%2Fview%2Fterminal" },
+        });
+      }
       if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
         if (srv.upgrade(req, { data: { upstream: null, pending: [] } })) {
           return undefined as unknown as Response;
@@ -804,11 +874,47 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
       return renderViewPage("terminal");
     }
 
+    if (req.method === "GET" && url.pathname === "/login") {
+      return renderLoginPage(safeNextPath(url.searchParams.get("next")));
+    }
+
+    if (req.method === "POST" && url.pathname === "/login") {
+      const form = await req.formData();
+      const token = String(form.get("token") || "").trim();
+      const nextPath = safeNextPath(String(form.get("next") || "/"));
+      if (!token || !safeEqual(token, MCP_TOKEN)) {
+        return renderLoginPage(nextPath, "Invalid token.");
+      }
+      const isHttps =
+        req.headers.get("x-forwarded-proto") === "https" || url.protocol === "https:";
+      const cookie = `openboxy_ui=${encodeURIComponent(signAccessToken("ui"))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}${isHttps ? "; Secure" : ""}`;
+      return new Response(null, {
+        status: 303,
+        headers: { Location: nextPath, "Set-Cookie": cookie },
+      });
+    }
+
+    if (req.method === "POST" && url.pathname === "/logout") {
+      return new Response(null, {
+        status: 303,
+        headers: {
+          Location: "/login",
+          "Set-Cookie": "openboxy_ui=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+        },
+      });
+    }
+
     if (req.method === "GET" && url.pathname === "/health") {
       return Response.json({ status: "ok", service: "openboxy-mcp" });
     }
 
     if (req.method === "GET" && url.pathname === "/") {
+      if (!uiAuthorized(req)) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "/login?next=%2F" },
+        });
+      }
       const upstream = await fetch(`${UI_URL}/`, {
         headers: {
           host: "localhost:3001",
@@ -857,6 +963,18 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
       const headers = new Headers(upstream.headers);
       headers.delete("content-length");
       return new Response(patched, { status: upstream.status, headers });
+    }
+
+    if (url.pathname === "/view" || url.pathname.startsWith("/view/")) {
+      if (!uiAuthorized(req)) {
+        if (req.method === "GET" && url.pathname === "/view") {
+          return new Response(null, {
+            status: 302,
+            headers: { Location: "/login?next=%2Fview" },
+          });
+        }
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
     }
 
     if (req.method === "GET" && url.pathname === "/view") {

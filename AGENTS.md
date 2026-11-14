@@ -57,10 +57,12 @@ When asked by a user to deploy OpenBoxy on a Linux server:
    ```
    Test MCP `initialize` with `OPENBOXY_MCP_TOKEN` against `http://127.0.0.1:3100/mcp`.
 
-5. **Configure Reverse Proxy (if public domain requested):**
-   - Route `/mcp*`, `/.well-known/oauth*`, `/oauth/*` publicly to `openboxy-mcp:3100` (protected by OAuth / `OPENBOXY_MCP_TOKEN`).
-   - Route `/` and `/view*` behind Basic Auth to `openboxy-mcp:3100`.
-   - Route remaining paths behind Basic Auth to `openboxy:3001` with `Host: localhost:3001` and `Origin: http://localhost:3001`.
+5. **Configure Reverse Proxy / Auth (if public domain requested):**
+   - Ask or inspect what the user already runs (Nginx, Caddy, Traefik, Cloudflare Tunnel, Tailscale, etc.) — do not assume Caddy.
+   - Default `OPENBOXY_UI_AUTH=token` protects `/`, `/view*`, and `/view/terminal` with `OPENBOXY_MCP_TOKEN` via `/login` (`HttpOnly` cookie), so no proxy-level Basic Auth is required.
+   - If the user already enforces SSO/VPN/Basic Auth at the proxy/edge (Tailscale, Cloudflare Access, Authelia, Caddy `basicauth`), set `OPENBOXY_UI_AUTH=off` in `.env` so they are not prompted twice.
+   - Route `/`, `/login`, `/logout`, `/view*`, `/mcp*`, `/.well-known/oauth*`, `/.well-known/openid-configuration`, `/oauth/*` to `openboxy-mcp:3100` (with WebSocket upgrade support for `/view/terminal`).
+   - Route remaining paths to `openboxy:3001` with `Host: localhost:3001` and `Origin: http://localhost:3001`.
    - **Never** expose `agent-computer` port `4100` publicly.
 
 6. **Hand Off to User:**
