@@ -302,23 +302,36 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
   ${OPENBOXY_THEME_HEAD}
   <style>
     body { display: flex; flex-direction: column; height: 100vh; }
-    header { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: var(--card); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-    .brand { color: var(--card-foreground); text-decoration: none; font-size: 14px; font-weight: 600; letter-spacing: -0.05em; line-height: 1.25; padding: 6px 8px; border-radius: 8px; }
+    header { display: flex; gap: 10px; align-items: center; padding: 8px 14px; background: var(--card); border-bottom: 1px solid var(--border); flex-wrap: nowrap; min-height: 50px; }
+    .brand { color: var(--card-foreground); text-decoration: none; font-size: 14px; font-weight: 600; letter-spacing: -0.05em; line-height: 1.25; padding: 5px 8px; border-radius: 8px; flex-shrink: 0; }
     .brand:hover { background: var(--muted); }
-    .user-pill { font-size: 12px; font-weight: 600; color: var(--muted-foreground); background: var(--muted); border: 1px solid var(--border); padding: 4px 9px; border-radius: 999px; }
-    .tabs { display: flex; gap: 3px; background: var(--muted); padding: 3px; border-radius: 10px; border: 1px solid var(--border); }
-    .tab { padding: 5px 12px; border-radius: 7px; border: 0; background: transparent; color: var(--muted-foreground); font-weight: 600; cursor: pointer; font-size: 13px; }
+    .tabs { display: flex; gap: 2px; background: var(--muted); padding: 3px; border-radius: 9px; border: 1px solid var(--border); flex-shrink: 0; }
+    .tab { padding: 4px 11px; border-radius: 6px; border: 0; background: transparent; color: var(--muted-foreground); font-weight: 600; cursor: pointer; font-size: 12.5px; }
     .tab.active { background: var(--card); color: var(--card-foreground); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
-    header form { display: flex; flex: 1; gap: 8px; min-width: 220px; }
-    input[type="text"] { flex: 1; padding: 7px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--background); color: var(--card-foreground); font-size: 13px; outline: none; }
-    input[type="text"]:focus { border-color: var(--primary); }
-    button { padding: 7px 13px; border-radius: 10px; border: 1px solid transparent; background: var(--primary); color: var(--primary-foreground); font-weight: 600; cursor: pointer; font-size: 13px; white-space: nowrap; }
+    .url-bar { display: flex; flex: 1; align-items: center; gap: 4px; min-width: 140px; max-width: 680px; background: var(--background); border: 1px solid var(--border); border-radius: 9px; padding: 2px 4px 2px 10px; }
+    .url-bar:focus-within { border-color: var(--primary); }
+    .url-bar input[type="text"] { flex: 1; min-width: 0; padding: 4px 0; border: 0; background: transparent; color: var(--card-foreground); font-size: 12.5px; outline: none; }
+    .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 0; background: transparent; color: var(--muted-foreground); cursor: pointer; font-size: 14px; }
+    .icon-btn:hover { background: var(--muted); color: var(--card-foreground); }
+    .spacer { flex: 1; display: none; }
+    .actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
+    button { padding: 6px 12px; border-radius: 9px; border: 1px solid transparent; background: var(--primary); color: var(--primary-foreground); font-weight: 600; cursor: pointer; font-size: 12.5px; white-space: nowrap; }
     button:hover { opacity: 0.9; }
     button.sec { background: var(--muted); color: var(--card-foreground); border-color: var(--border); }
     button.sec:hover { opacity: 0.85; }
     button.take { background: #d97706; color: #fff; }
     button.release { background: #16a34a; color: #fff; }
-    .meta { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
+    .meta { font-size: 11.5px; color: var(--muted-foreground); white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+    .menu-wrap { position: relative; }
+    .menu-btn { display: inline-flex; align-items: center; gap: 5px; padding: 6px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--muted); color: var(--card-foreground); font-weight: 600; font-size: 12.5px; cursor: pointer; }
+    .menu-btn:hover { opacity: 0.85; }
+    .menu-pop { display: none; position: absolute; right: 0; top: calc(100% + 6px); min-width: 190px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 6px; box-shadow: 0 14px 36px rgba(0,0,0,.18); z-index: 1000; }
+    .menu-pop.open { display: flex; flex-direction: column; gap: 2px; }
+    .menu-head { padding: 6px 10px; font-size: 11.5px; color: var(--muted-foreground); border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+    .menu-item { display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left; padding: 7px 10px; border-radius: 8px; border: 0; background: transparent; color: var(--card-foreground); font-size: 12.5px; font-weight: 500; cursor: pointer; text-decoration: none; }
+    .menu-item:hover { background: var(--muted); opacity: 1; }
+    .menu-item.danger { color: var(--destructive); }
+    @media (max-width: 720px) { .meta { display: none; } header { gap: 6px; padding: 8px 10px; } }
     main { flex: 1; display: grid; place-items: center; overflow: auto; padding: 12px; position: relative; }
     img { max-width: 100%; max-height: calc(100vh - 76px); border: 2px solid var(--border); border-radius: 12px; background: #fff; box-shadow: 0 10px 28px rgba(0,0,0,.12); outline: none; }
     .dark img { box-shadow: 0 12px 32px rgba(0,0,0,.45); }
@@ -335,21 +348,28 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
 <body>
   <header>
     <a class="brand" href="/">OpenBoxy</a>
-    <span class="user-pill" title="Active sandbox user">@${escapeHtml(userId)}</span>
     <div class="tabs">
       <button class="tab active" id="tabBrowser" type="button">Browser</button>
       <button class="tab" id="tabTerminal" type="button">Terminal</button>
     </div>
-    <form id="navForm">
+    <form id="navForm" class="url-bar">
       <input id="urlInput" type="text" placeholder="https://example.com" />
-      <button type="submit">Go</button>
+      <button class="icon-btn" id="refreshBtn" type="button" title="Refresh view">&#8635;</button>
+      <button class="icon-btn" type="submit" title="Navigate">&#8594;</button>
     </form>
-    <button class="take" id="controlBtn" type="button">Take Control</button>
-    <button class="sec" id="refreshBtn" type="button">Refresh</button>
-    <button class="sec" id="mcpSetupBtn" type="button">MCP Setup</button>
-    <button class="sec" id="themeBtn" type="button" title="Toggle light/dark mode"></button>
-    ${showLogout ? `<a href="/logout" style="text-decoration:none;"><button class="sec" type="button">Sign Out</button></a>` : ""}
-    <span class="meta" id="status">Loading…</span>
+    <div class="actions">
+      <span class="meta" id="status">Loading…</span>
+      <button class="take" id="controlBtn" type="button">Take Control</button>
+      <div class="menu-wrap">
+        <button class="menu-btn" id="menuBtn" type="button" aria-haspopup="true" aria-expanded="false" title="More options">&#8943;</button>
+        <div class="menu-pop" id="menuPop" role="menu">
+          <div class="menu-head">Signed in as <strong>@${escapeHtml(userId)}</strong></div>
+          <button class="menu-item" id="mcpSetupBtn" type="button" role="menuitem">MCP Setup</button>
+          <button class="menu-item" id="themeBtn" type="button" role="menuitem">Theme</button>
+          ${showLogout ? `<a class="menu-item danger" href="/logout" role="menuitem">Sign Out</a>` : ""}
+        </div>
+      </div>
+    </div>
   </header>
   <main>
     <img id="screen" tabindex="0" alt="Live Browser View" />
@@ -387,6 +407,8 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     const refreshBtn = document.getElementById("refreshBtn");
     const mcpSetupBtn = document.getElementById("mcpSetupBtn");
     const mcpModal = document.getElementById("mcpModal");
+    const menuBtn = document.getElementById("menuBtn");
+    const menuPop = document.getElementById("menuPop");
     const tabBrowser = document.getElementById("tabBrowser");
     const tabTerminal = document.getElementById("tabTerminal");
     const statusEl = document.getElementById("status");
@@ -399,7 +421,24 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     let fitAddon = null;
     let termWs = null;
 
+    function closeMenu() {
+      menuPop.classList.remove("open");
+      menuBtn.setAttribute("aria-expanded", "false");
+    }
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = menuPop.classList.toggle("open");
+      menuBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    document.addEventListener("click", (e) => {
+      if (!menuPop.contains(e.target) && e.target !== menuBtn) closeMenu();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { closeMenu(); mcpModal.style.display = "none"; }
+    });
+
     mcpSetupBtn.addEventListener("click", () => {
+      closeMenu();
       mcpModal.style.display = mcpModal.style.display === "grid" ? "none" : "grid";
     });
 
@@ -446,7 +485,7 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     function applyTheme(isDark) {
       document.documentElement.classList.toggle("dark", isDark);
       document.documentElement.style.colorScheme = isDark ? "dark" : "light";
-      themeBtn.textContent = isDark ? "Light" : "Dark";
+      themeBtn.innerHTML = isDark ? "<span>Theme</span><span>Light</span>" : "<span>Theme</span><span>Dark</span>";
       if (term) term.options.theme = getTermTheme(isDark);
     }
     applyTheme(document.documentElement.classList.contains("dark"));
