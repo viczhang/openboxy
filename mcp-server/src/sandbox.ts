@@ -432,11 +432,15 @@ export class SandboxManager {
     });
   }
 
-  async scroll(rawUserId: string, deltaY: number): Promise<{ url: string; scrollY: number }> {
+  async scroll(rawUserId: string, deltaY: number, scrollToY?: number): Promise<{ url: string; scrollY: number }> {
     const state = await this.ensureUserState(rawUserId);
     return this.withLock(state, async () => {
       const page = await this.getActivePage(state);
-      await page.mouse.wheel(0, deltaY);
+      if (typeof scrollToY === "number") {
+        await page.evaluate((y) => window.scrollTo(0, y), scrollToY);
+      } else {
+        await page.mouse.wheel(0, deltaY);
+      }
       const scrollY = await page.evaluate(() => window.scrollY).catch(() => 0);
       return { url: page.url(), scrollY };
     });
@@ -445,12 +449,29 @@ export class SandboxManager {
   async screenshot(
     rawUserId: string,
     savePath?: string,
-  ): Promise<{ base64: string; width: number; height: number; url: string; capturedAt: string; savedPath?: string }> {
+  ): Promise<{
+    base64: string;
+    width: number;
+    height: number;
+    scrollY: number;
+    scrollHeight: number;
+    clientHeight: number;
+    url: string;
+    capturedAt: string;
+    savedPath?: string;
+  }> {
     const state = await this.ensureUserState(rawUserId);
     return this.withLock(state, async () => {
       const page = await this.getActivePage(state);
       const buf = await page.screenshot({ type: "png" });
       const vp = page.viewportSize() || { width: 1280, height: 800 };
+      const metrics = await page
+        .evaluate(() => ({
+          scrollY: window.scrollY || 0,
+          scrollHeight: document.documentElement?.scrollHeight || window.innerHeight || 0,
+          clientHeight: window.innerHeight || 0,
+        }))
+        .catch(() => ({ scrollY: 0, scrollHeight: vp.height, clientHeight: vp.height }));
       let savedPath: string | undefined;
       if (savePath && savePath.trim()) {
         const resolved = this.resolveWorkspacePath(state.workspaceDir, savePath.trim());
@@ -462,6 +483,9 @@ export class SandboxManager {
         base64: buf.toString("base64"),
         width: vp.width,
         height: vp.height,
+        scrollY: metrics.scrollY,
+        scrollHeight: metrics.scrollHeight,
+        clientHeight: metrics.clientHeight,
         url: page.url(),
         capturedAt: new Date().toISOString(),
         ...(savedPath ? { savedPath } : {}),

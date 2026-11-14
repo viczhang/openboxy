@@ -384,9 +384,17 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     .menu-item.danger { color: var(--destructive); }
     @media (max-width: 720px) { .meta { display: none; } header { gap: 6px; padding: 8px 10px; } }
     main { flex: 1; display: grid; place-items: center; overflow: auto; padding: 12px; position: relative; }
-    img { max-width: 100%; max-height: calc(100vh - 76px); border: 2px solid var(--border); border-radius: 12px; background: #fff; box-shadow: 0 10px 28px rgba(0,0,0,.12); outline: none; }
+    img { max-width: 100%; max-height: calc(100vh - 76px); border: 2px solid var(--border); border-radius: 12px; background: #fff; box-shadow: 0 10px 28px rgba(0,0,0,.12); outline: none; display: block; }
     .dark img { box-shadow: 0 12px 32px rgba(0,0,0,.45); }
     img.controlling { border-color: #22c55e; cursor: crosshair; }
+    #browserWrap { display: flex; align-items: stretch; gap: 8px; max-width: 100%; max-height: calc(100vh - 76px); }
+    #vScroll { display: flex; flex-direction: column; align-items: center; width: 22px; background: var(--card); border: 1px solid var(--border); border-radius: 11px; padding: 3px; gap: 4px; flex-shrink: 0; user-select: none; }
+    #vScroll.disabled { opacity: 0.4; }
+    .vscroll-step { width: 16px; height: 18px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted-foreground); font-size: 9px; display: grid; place-items: center; cursor: pointer; }
+    .vscroll-step:hover { background: var(--muted); color: var(--card-foreground); opacity: 1; }
+    #vTrack { position: relative; flex: 1; width: 100%; border-radius: 6px; background: var(--muted); cursor: pointer; touch-action: none; }
+    #vThumb { position: absolute; left: 2px; right: 2px; top: 0; height: 32px; border-radius: 5px; background: var(--muted-foreground); opacity: 0.55; cursor: grab; transition: opacity 0.15s; }
+    #vThumb:hover, #vThumb.dragging { opacity: 0.9; cursor: grabbing; }
     #termWrap { display: none; width: 100%; height: 100%; background: var(--card); border: 2px solid var(--border); border-radius: 12px; padding: 10px; overflow: hidden; }
     #termWrap.controlling { border-color: #22c55e; }
     #terminal { width: 100%; height: 100%; }
@@ -444,7 +452,14 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     </div>
   </header>
   <main>
-    <img id="screen" tabindex="0" alt="Live Browser View" />
+    <div id="browserWrap">
+      <img id="screen" tabindex="0" alt="Live Browser View" />
+      <div id="vScroll" class="disabled" title="Scroll remote page (Take Control first)">
+        <button type="button" class="vscroll-step" id="scrollUpBtn" title="Scroll up">&#9650;</button>
+        <div id="vTrack"><div id="vThumb"></div></div>
+        <button type="button" class="vscroll-step" id="scrollDownBtn" title="Scroll down">&#9660;</button>
+      </div>
+    </div>
     <div id="termWrap"><div id="terminal"></div></div>
     <div id="filesWrap">
       <div class="files-panel">
@@ -493,6 +508,12 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
   <script>
+    const browserWrap = document.getElementById("browserWrap");
+    const vScroll = document.getElementById("vScroll");
+    const vTrack = document.getElementById("vTrack");
+    const vThumb = document.getElementById("vThumb");
+    const scrollUpBtn = document.getElementById("scrollUpBtn");
+    const scrollDownBtn = document.getElementById("scrollDownBtn");
     const img = document.getElementById("screen");
     const termWrap = document.getElementById("termWrap");
     const termEl = document.getElementById("terminal");
@@ -563,6 +584,26 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
       } catch {}
     }
 
+    let pageMetrics = { scrollY: 0, scrollHeight: 800, clientHeight: 800 };
+    let draggingThumb = false;
+
+    function updateScrollbar(scrollY, scrollHeight, clientHeight) {
+      pageMetrics = {
+        scrollY: Number(scrollY) || 0,
+        scrollHeight: Math.max(1, Number(scrollHeight) || 800),
+        clientHeight: Math.max(1, Number(clientHeight) || 800),
+      };
+      const maxScroll = Math.max(0, pageMetrics.scrollHeight - pageMetrics.clientHeight);
+      vScroll.classList.toggle("disabled", maxScroll <= 2);
+      const trackH = vTrack.clientHeight || 200;
+      const ratio = Math.min(1, pageMetrics.clientHeight / pageMetrics.scrollHeight);
+      const thumbH = Math.max(24, Math.round(trackH * ratio));
+      const maxTop = Math.max(0, trackH - thumbH);
+      const top = maxScroll > 0 ? Math.round((pageMetrics.scrollY / maxScroll) * maxTop) : 0;
+      vThumb.style.height = thumbH + "px";
+      vThumb.style.top = top + "px";
+    }
+
     async function refresh() {
       if (busy || activeTab !== "browser") return;
       busy = true;
@@ -571,6 +612,9 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         img.src = "data:image/png;base64," + data.base64;
+        if (!draggingThumb) {
+          updateScrollbar(data.scrollY, data.scrollHeight, data.clientHeight);
+        }
         if (document.activeElement !== urlInput && data.url) {
           urlInput.value = data.url;
         }
@@ -817,7 +861,7 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
       tabBrowser.className = tab === "browser" ? "tab active" : "tab";
       tabTerminal.className = tab === "terminal" ? "tab active" : "tab";
       tabFiles.className = tab === "files" ? "tab active" : "tab";
-      img.style.display = tab === "browser" ? "block" : "none";
+      browserWrap.style.display = tab === "browser" ? "flex" : "none";
       navForm.style.display = tab === "browser" ? "flex" : "none";
       refreshBtn.style.display = tab === "browser" ? "inline-flex" : "none";
       controlBtn.style.display = tab === "files" ? "none" : "inline-block";
@@ -928,6 +972,94 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
         }
       }, 120);
     }, { passive: false });
+
+    function requireControlForScroll() {
+      if (controlling) return true;
+      statusEl.textContent = "Click Take Control to scroll";
+      return false;
+    }
+
+    scrollUpBtn.addEventListener("click", async () => {
+      if (!requireControlForScroll()) return;
+      await sendAction("/view/scroll", { deltaY: -260 });
+      setTimeout(refresh, 100);
+    });
+
+    scrollDownBtn.addEventListener("click", async () => {
+      if (!requireControlForScroll()) return;
+      await sendAction("/view/scroll", { deltaY: 260 });
+      setTimeout(refresh, 100);
+    });
+
+    function scrollToTrackY(clientY) {
+      const rect = vTrack.getBoundingClientRect();
+      const thumbH = vThumb.offsetHeight || 24;
+      const maxTop = Math.max(1, rect.height - thumbH);
+      const rel = Math.min(Math.max(0, clientY - rect.top - thumbH / 2), maxTop);
+      const frac = rel / maxTop;
+      const maxScroll = Math.max(0, pageMetrics.scrollHeight - pageMetrics.clientHeight);
+      const targetY = Math.round(frac * maxScroll);
+      vThumb.style.top = Math.round(rel) + "px";
+      return targetY;
+    }
+
+    let thumbCommitTimer = null;
+    vTrack.addEventListener("pointerdown", (e) => {
+      if (!requireControlForScroll()) return;
+      e.preventDefault();
+      draggingThumb = true;
+      vThumb.classList.add("dragging");
+      vTrack.setPointerCapture(e.pointerId);
+      const targetY = scrollToTrackY(e.clientY);
+      if (thumbCommitTimer) clearTimeout(thumbCommitTimer);
+      thumbCommitTimer = setTimeout(async () => {
+        await sendAction("/view/scroll", { y: targetY });
+        setTimeout(refresh, 100);
+      }, 60);
+    });
+
+    vTrack.addEventListener("pointermove", (e) => {
+      if (!draggingThumb) return;
+      const targetY = scrollToTrackY(e.clientY);
+      if (thumbCommitTimer) clearTimeout(thumbCommitTimer);
+      thumbCommitTimer = setTimeout(async () => {
+        await sendAction("/view/scroll", { y: targetY });
+      }, 60);
+    });
+
+    function endThumbDrag(e) {
+      if (!draggingThumb) return;
+      draggingThumb = false;
+      vThumb.classList.remove("dragging");
+      const targetY = scrollToTrackY(e.clientY);
+      sendAction("/view/scroll", { y: targetY }).then(() => setTimeout(refresh, 100)).catch(() => {});
+    }
+    vTrack.addEventListener("pointerup", endThumbDrag);
+    vTrack.addEventListener("pointercancel", endThumbDrag);
+
+    let touchLastY = null;
+    img.addEventListener("touchstart", (e) => {
+      if (!controlling || e.touches.length !== 1) return;
+      touchLastY = e.touches[0].clientY;
+    }, { passive: true });
+    img.addEventListener("touchmove", (e) => {
+      if (!controlling || touchLastY === null || e.touches.length !== 1) return;
+      const dy = touchLastY - e.touches[0].clientY;
+      touchLastY = e.touches[0].clientY;
+      if (Math.abs(dy) < 4) return;
+      e.preventDefault();
+      pendingScrollY += dy * 1.5;
+      if (scrollTimer) return;
+      scrollTimer = setTimeout(async () => {
+        const deltaY = Math.round(pendingScrollY);
+        pendingScrollY = 0;
+        scrollTimer = null;
+        if (!deltaY) return;
+        await sendAction("/view/scroll", { deltaY }).catch(() => {});
+        setTimeout(refresh, 120);
+      }, 120);
+    }, { passive: false });
+    img.addEventListener("touchend", () => { touchLastY = null; });
 
     navForm.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -1679,10 +1811,12 @@ const server = Bun.serve<TerminalSocketData>({
     }
 
     if (req.method === "POST" && url.pathname === "/view/scroll") {
-      const body = (await req.json().catch(() => ({}))) as { deltaY?: number };
-      if (typeof body.deltaY !== "number") return Response.json({ error: "deltaY is required" }, { status: 400 });
+      const body = (await req.json().catch(() => ({}))) as { deltaY?: number; y?: number };
+      if (typeof body.deltaY !== "number" && typeof body.y !== "number") {
+        return Response.json({ error: "deltaY or y is required" }, { status: 400 });
+      }
       try {
-        return Response.json(await sandbox.scroll(uiUserId, body.deltaY));
+        return Response.json(await sandbox.scroll(uiUserId, body.deltaY ?? 0, body.y));
       } catch (err) {
         return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
       }
