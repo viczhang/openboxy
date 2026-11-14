@@ -230,10 +230,58 @@ function renderLoginPage(nextPath: string, error?: string): Response {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenBoxy Sign In</title>
   ${OPENBOXY_THEME_HEAD}
+  <style>
+    .obx-login-wrap {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      min-height: 100vh;
+      padding: 24px 16px;
+      background:
+        radial-gradient(600px circle at 50% 18%, color-mix(in oklch, var(--primary) 7%, transparent), transparent 70%),
+        var(--background);
+    }
+    .obx-hero { text-align: center; max-width: 520px; }
+    .obx-badge {
+      display: inline-block;
+      font-size: 11.5px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted-foreground);
+      background: var(--muted);
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      border-radius: 999px;
+      margin-bottom: 12px;
+    }
+    .obx-hero h2 {
+      margin: 0 0 8px;
+      font-size: clamp(22px, 3.6vw, 30px);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.2;
+      color: var(--card-foreground);
+    }
+    .obx-hero p {
+      margin: 0;
+      font-size: 14.5px;
+      line-height: 1.55;
+      color: var(--muted-foreground);
+    }
+  </style>
 </head>
-<body class="obx-center">
+<body class="obx-login-wrap">
+  <div class="obx-hero">
+    <span class="obx-badge">OpenBoxy MCP</span>
+    <h2>Give your AI agents a real browser and terminal.</h2>
+    <p>OpenBoxy equips chat-only AI agents with a persistent Chromium browser, workspace shell, and live human takeover over MCP.</p>
+  </div>
   <div class="obx-card">
-    <h1>OpenBoxy</h1>
+    <h1>Sign In</h1>
     <p>Enter your API access token to open your isolated browser session and terminal.</p>
     ${error ? `<div class="obx-err">${escapeHtml(error)}</div>` : ""}
     <form method="POST" action="/login">
