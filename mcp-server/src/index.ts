@@ -340,6 +340,44 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     null,
     2,
   );
+  const geminiCliJson = JSON.stringify(
+    {
+      mcpServers: {
+        [mcpName]: {
+          httpUrl: mcpUrl,
+          oauth: { enabled: true },
+        },
+      },
+    },
+    null,
+    2,
+  );
+  const cursorJson = JSON.stringify(
+    {
+      mcpServers: {
+        [mcpName]: {
+          url: mcpUrl,
+        },
+      },
+    },
+    null,
+    2,
+  );
+  const openclawJson = JSON.stringify(
+    {
+      mcp: {
+        servers: {
+          [mcpName]: {
+            transport: "http",
+            url: mcpUrl,
+          },
+        },
+      },
+    },
+    null,
+    2,
+  );
+  const codexToml = `[mcp_servers.${mcpName}]\nurl = "${mcpUrl}"`;
   const agentPrompt = `Add the remote Streamable HTTP MCP server "${mcpName}" at ${mcpUrl} (with OAuth) to my MCP client config, then tell me how to finish signing in.`;
   const showLogout = UI_AUTH !== "off" && UI_AUTH !== "none" && UI_AUTH !== "false";
 
@@ -419,9 +457,16 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     .preview-body pre { width: 100%; height: 100%; margin: 0; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--card-foreground); }
     .preview-empty { color: var(--muted-foreground); font-size: 13px; text-align: center; }
     #mcpModal { display: none; position: fixed; inset: 0; z-index: 99999; background: rgba(0,0,0,0.45); place-items: center; padding: 16px; }
-    #mcpModal .modal-card { width: min(500px, 100%); max-height: 85vh; overflow: auto; background: var(--card); color: var(--card-foreground); border: 1px solid var(--border); border-radius: 14px; padding: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.3); font-size: 13px; line-height: 1.5; }
-    #mcpModal pre { margin: 0 0 12px; padding: 10px 12px; background: var(--muted); border: 1px solid var(--border); border-radius: 10px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--card-foreground); }
+    #mcpModal .modal-card { width: min(620px, 100%); max-height: 88vh; overflow: auto; background: var(--card); color: var(--card-foreground); border: 1px solid var(--border); border-radius: 14px; padding: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.3); font-size: 13px; line-height: 1.5; }
+    #mcpModal pre { margin: 0 0 10px; padding: 10px 12px; background: var(--muted); border: 1px solid var(--border); border-radius: 10px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--card-foreground); }
     #mcpModal code { background: var(--muted); color: var(--card-foreground); padding: 2px 6px; border-radius: 6px; font-size: 12px; }
+    .mcp-clients { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 12px; }
+    .mcp-pill { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--muted); color: var(--muted-foreground); font-size: 12px; font-weight: 600; cursor: pointer; }
+    .mcp-pill.active { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+    .mcp-panel { display: none; }
+    .mcp-panel.active { display: block; }
+    .mcp-steps { margin: 6px 0 10px; padding-left: 18px; color: var(--muted-foreground); }
+    .mcp-steps li { margin-bottom: 4px; }
   </style>
 </head>
 <body>
@@ -491,18 +536,132 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
         <strong style="font-size:15px;">Connect MCP (${escapeHtml(mcpName)})</strong>
         <button type="button" class="sec" style="padding:4px 9px;" onclick="document.getElementById('mcpModal').style.display='none';">&times;</button>
       </div>
-      <div style="margin-bottom:12px;color:var(--muted-foreground);">Endpoint: <code>${escapeHtml(mcpUrl)}</code></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <span><strong>Option 1 — Paste to an AI Agent</strong> (OpenCode, Claude Code, Cursor, Codex):</span>
-        <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxAgentPrompt').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;padding:8px 10px;background:var(--muted);border:1px solid var(--border);border-radius:10px;">
+        <div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          <span style="color:var(--muted-foreground);font-size:12px;">Endpoint:</span> <code id="obxMcpUrl">${escapeHtml(mcpUrl)}</code>
+        </div>
+        <button type="button" class="sec" style="padding:3px 9px;font-size:11px;flex-shrink:0;" onclick="navigator.clipboard.writeText(document.getElementById('obxMcpUrl').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
       </div>
-      <pre id="obxAgentPrompt">${escapeHtml(agentPrompt)}</pre>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <span><strong>Option 2 — Manual JSON</strong> (<code>~/.config/opencode/opencode.jsonc</code>):</span>
-        <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxMcpJson').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+
+      <div class="mcp-clients" role="tablist">
+        <button type="button" class="mcp-pill active" data-mcp-client="opencode">OpenCode</button>
+        <button type="button" class="mcp-pill" data-mcp-client="claude-code">Claude Code</button>
+        <button type="button" class="mcp-pill" data-mcp-client="codex">Codex</button>
+        <button type="button" class="mcp-pill" data-mcp-client="gemini-cli">Gemini CLI</button>
+        <button type="button" class="mcp-pill" data-mcp-client="cursor">Cursor</button>
+        <button type="button" class="mcp-pill" data-mcp-client="openclaw">OpenClaw</button>
+        <button type="button" class="mcp-pill" data-mcp-client="chatgpt">ChatGPT</button>
+        <button type="button" class="mcp-pill" data-mcp-client="claude">Claude</button>
+        <button type="button" class="mcp-pill" data-mcp-client="gemini">Gemini</button>
       </div>
-      <pre id="obxMcpJson">${escapeHtml(opencodeJson)}</pre>
-      <div style="color:var(--muted-foreground);font-size:12px;">Then in OpenCode run <code>/mcps</code>, select <strong>${escapeHtml(mcpName)}</strong>, and sign in with your API access token (user <code>@${escapeHtml(userId)}</code>).</div>
+
+      <div class="mcp-panel active" data-mcp-panel="opencode">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span>Add to <code>~/.config/opencode/opencode.jsonc</code>:</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxMcpJson').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxMcpJson">${escapeHtml(opencodeJson)}</pre>
+        <ol class="mcp-steps">
+          <li>Run <code>/mcps</code> in OpenCode, select <strong>${escapeHtml(mcpName)}</strong>, and click Sign in.</li>
+          <li>Approve with your API token (user <code>@${escapeHtml(userId)}</code>).</li>
+        </ol>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="claude-code">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span>Run in your terminal:</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxClaudeCodeCmd').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxClaudeCodeCmd">claude mcp add --transport http ${escapeHtml(mcpName)} ${escapeHtml(mcpUrl)}</pre>
+        <ol class="mcp-steps">
+          <li>In Claude Code run <code>/mcp</code> (or <code>claude mcp login ${escapeHtml(mcpName)}</code>) and select <strong>Authenticate</strong>.</li>
+          <li>Sign in with your API token in the browser popup.</li>
+        </ol>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="codex">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span>Run in your terminal:</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxCodexCmd').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxCodexCmd">codex mcp add ${escapeHtml(mcpName)} --url ${escapeHtml(mcpUrl)}
+codex mcp login ${escapeHtml(mcpName)}</pre>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 4px;">
+          <span style="color:var(--muted-foreground);">Or add to <code>~/.codex/config.toml</code>:</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxCodexToml').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxCodexToml">${escapeHtml(codexToml)}</pre>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="gemini-cli">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span>Run in your terminal:</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxGeminiCliCmd').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxGeminiCliCmd">gemini mcp add --transport http --scope user ${escapeHtml(mcpName)} ${escapeHtml(mcpUrl)}</pre>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 4px;">
+          <span style="color:var(--muted-foreground);">Or add to <code>~/.gemini/settings.json</code>:</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxGeminiCliJson').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxGeminiCliJson">${escapeHtml(geminiCliJson)}</pre>
+        <div style="color:var(--muted-foreground);font-size:12px;">Then run <code>/mcp auth ${escapeHtml(mcpName)}</code> inside Gemini CLI and sign in with your API token.</div>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="cursor">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span>Add to <code>~/.cursor/mcp.json</code> (or <strong>Settings &rarr; Tools &amp; MCP</strong>):</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxCursorJson').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxCursorJson">${escapeHtml(cursorJson)}</pre>
+        <div style="color:var(--muted-foreground);font-size:12px;">Click <strong>Needs login</strong> next to <strong>${escapeHtml(mcpName)}</strong> in Cursor and approve with your API token.</div>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="openclaw">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span>Run via CLI (or Control UI &rarr; <strong>Settings &rarr; MCP</strong>):</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxOpenClawCmd').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxOpenClawCmd">openclaw mcp add ${escapeHtml(mcpName)} --transport http --url ${escapeHtml(mcpUrl)}</pre>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 4px;">
+          <span style="color:var(--muted-foreground);">Or add to <code>~/.openclaw/openclaw.json</code>:</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxOpenClawJson').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxOpenClawJson">${escapeHtml(openclawJson)}</pre>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="chatgpt">
+        <ol class="mcp-steps">
+          <li>Open ChatGPT &rarr; <strong>Settings &rarr; Apps / Connectors</strong> (enable <em>Developer mode</em> if shown).</li>
+          <li>Click <strong>Create / Add custom MCP server</strong>.</li>
+          <li>Name: <code>${escapeHtml(mcpName)}</code> · MCP Server URL: <code>${escapeHtml(mcpUrl)}</code> · Authentication: <strong>OAuth</strong>.</li>
+          <li>Click <strong>Create</strong> and sign in with your API token on the OAuth prompt.</li>
+        </ol>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="claude">
+        <ol class="mcp-steps">
+          <li>Open Claude (Web or Desktop) &rarr; <strong>Settings &rarr; Connectors</strong>.</li>
+          <li>Click <strong>Add custom connector</strong>.</li>
+          <li>Name: <code>${escapeHtml(mcpName)}</code> · Remote MCP server URL: <code>${escapeHtml(mcpUrl)}</code>.</li>
+          <li>Click <strong>Connect</strong> and approve OAuth with your API token.</li>
+        </ol>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="gemini">
+        <ol class="mcp-steps">
+          <li>Open <code>gemini.google.com</code> &rarr; <strong>Settings &rarr; Connected Apps</strong>.</li>
+          <li>Select <strong>Add custom app / MCP Server URL</strong>.</li>
+          <li>Paste <code>${escapeHtml(mcpUrl)}</code> and complete OAuth sign-in with your API token.</li>
+        </ol>
+      </div>
+
+      <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span style="font-size:12px;"><strong>Or paste this prompt to any AI coding agent:</strong></span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxAgentPrompt').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxAgentPrompt" style="margin-bottom:0;">${escapeHtml(agentPrompt)}</pre>
+      </div>
     </div>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
@@ -567,6 +726,13 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     mcpSetupBtn.addEventListener("click", () => {
       closeMenu();
       mcpModal.style.display = mcpModal.style.display === "grid" ? "none" : "grid";
+    });
+    document.querySelectorAll("[data-mcp-client]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.getAttribute("data-mcp-client");
+        document.querySelectorAll("[data-mcp-client]").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll("[data-mcp-panel]").forEach((p) => p.classList.toggle("active", p.getAttribute("data-mcp-panel") === key));
+      });
     });
 
     function updateControlUi(state) {
