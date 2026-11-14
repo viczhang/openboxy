@@ -324,7 +324,7 @@ type AuthCodeRecord = {
 const registeredClients = new Map<string, RegisteredClient>();
 const authCodes = new Map<string, AuthCodeRecord>();
 
-function renderViewPage(req: Request, userId: string, initialTab: "browser" | "terminal" = "browser"): Response {
+function renderViewPage(req: Request, userId: string, initialTab: "browser" | "terminal" | "files" = "browser"): Response {
   const mcpUrl = `${publicOrigin(req)}/mcp`;
   const mcpName = process.env.OPENBOXY_MCP_NAME?.trim() || "boxy";
   const opencodeJson = JSON.stringify(
@@ -390,6 +390,26 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     #termWrap { display: none; width: 100%; height: 100%; background: var(--card); border: 2px solid var(--border); border-radius: 12px; padding: 10px; overflow: hidden; }
     #termWrap.controlling { border-color: #22c55e; }
     #terminal { width: 100%; height: 100%; }
+    #filesWrap { display: none; width: 100%; height: 100%; grid-template-columns: minmax(260px, 380px) 1fr; gap: 12px; }
+    @media (max-width: 820px) { #filesWrap { grid-template-columns: 1fr; grid-template-rows: 260px 1fr; } }
+    .files-panel, .preview-panel { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; min-height: 0; }
+    .files-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--muted); font-size: 12px; }
+    .crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+    .crumb { border: 0; background: transparent; color: var(--card-foreground); font-weight: 600; padding: 2px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+    .crumb:hover { background: var(--card); }
+    .files-list { flex: 1; overflow: auto; padding: 6px; }
+    .file-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 12.5px; }
+    .file-row:hover { background: var(--muted); }
+    .file-row.active { background: var(--muted); outline: 1px solid var(--border); }
+    .file-name { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+    .file-meta { display: flex; align-items: center; gap: 6px; color: var(--muted-foreground); font-size: 11.5px; flex-shrink: 0; }
+    .file-act { border: 0; background: transparent; color: var(--muted-foreground); padding: 2px 5px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+    .file-act:hover { background: var(--card); color: var(--card-foreground); }
+    .file-act.del:hover { color: var(--destructive); }
+    .preview-body { flex: 1; overflow: auto; padding: 14px; display: grid; place-items: center; }
+    .preview-body img { max-width: 100%; max-height: 100%; border: 1px solid var(--border); border-radius: 8px; box-shadow: none; }
+    .preview-body pre { width: 100%; height: 100%; margin: 0; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--card-foreground); }
+    .preview-empty { color: var(--muted-foreground); font-size: 13px; text-align: center; }
     #mcpModal { display: none; position: fixed; inset: 0; z-index: 99999; background: rgba(0,0,0,0.45); place-items: center; padding: 16px; }
     #mcpModal .modal-card { width: min(500px, 100%); max-height: 85vh; overflow: auto; background: var(--card); color: var(--card-foreground); border: 1px solid var(--border); border-radius: 14px; padding: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.3); font-size: 13px; line-height: 1.5; }
     #mcpModal pre { margin: 0 0 12px; padding: 10px 12px; background: var(--muted); border: 1px solid var(--border); border-radius: 10px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--card-foreground); }
@@ -402,6 +422,7 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     <div class="tabs">
       <button class="tab active" id="tabBrowser" type="button">Browser</button>
       <button class="tab" id="tabTerminal" type="button">Terminal</button>
+      <button class="tab" id="tabFiles" type="button">Files</button>
     </div>
     <form id="navForm" class="url-bar">
       <input id="urlInput" type="text" placeholder="https://example.com" />
@@ -425,6 +446,29 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
   <main>
     <img id="screen" tabindex="0" alt="Live Browser View" />
     <div id="termWrap"><div id="terminal"></div></div>
+    <div id="filesWrap">
+      <div class="files-panel">
+        <div class="files-bar">
+          <div class="crumbs" id="fileCrumbs"></div>
+          <div style="display:flex;gap:4px;flex-shrink:0;">
+            <label class="sec" style="padding:4px 8px;border-radius:7px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-weight:600;font-size:11.5px;">
+              Upload<input id="fileUploadInput" type="file" multiple style="display:none;" />
+            </label>
+            <button class="sec" id="filesRefreshBtn" type="button" style="padding:4px 8px;font-size:11.5px;">Refresh</button>
+          </div>
+        </div>
+        <div class="files-list" id="filesList"></div>
+      </div>
+      <div class="preview-panel">
+        <div class="files-bar">
+          <span id="previewTitle" style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Select a file to preview</span>
+          <a id="previewDownload" href="#" style="display:none;text-decoration:none;"><button class="sec" type="button" style="padding:4px 8px;font-size:11.5px;">Download</button></a>
+        </div>
+        <div class="preview-body" id="previewBody">
+          <div class="preview-empty">Screenshots, images, logs, and code saved in your workspace appear here.</div>
+        </div>
+      </div>
+    </div>
   </main>
   <div id="mcpModal" onclick="if(event.target===this)this.style.display='none';">
     <div class="modal-card">
@@ -462,7 +506,18 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     const menuPop = document.getElementById("menuPop");
     const tabBrowser = document.getElementById("tabBrowser");
     const tabTerminal = document.getElementById("tabTerminal");
+    const tabFiles = document.getElementById("tabFiles");
+    const filesWrap = document.getElementById("filesWrap");
+    const fileCrumbs = document.getElementById("fileCrumbs");
+    const filesList = document.getElementById("filesList");
+    const filesRefreshBtn = document.getElementById("filesRefreshBtn");
+    const fileUploadInput = document.getElementById("fileUploadInput");
+    const previewTitle = document.getElementById("previewTitle");
+    const previewDownload = document.getElementById("previewDownload");
+    const previewBody = document.getElementById("previewBody");
     const statusEl = document.getElementById("status");
+    let currentDir = ".";
+    let selectedFile = "";
     let busy = false;
     let controlling = false;
     let activeTab = "browser";
@@ -609,17 +664,170 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
       };
     }
 
+    function formatBytes(n) {
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+      return (n / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    function renderCrumbs(dir) {
+      fileCrumbs.innerHTML = "";
+      const rootBtn = document.createElement("button");
+      rootBtn.type = "button";
+      rootBtn.className = "crumb";
+      rootBtn.textContent = "workspace";
+      rootBtn.onclick = () => loadFiles(".");
+      fileCrumbs.appendChild(rootBtn);
+      if (dir && dir !== ".") {
+        const parts = dir.split("/").filter(Boolean);
+        let acc = "";
+        for (const p of parts) {
+          acc = acc ? acc + "/" + p : p;
+          const sep = document.createElement("span");
+          sep.textContent = "/";
+          sep.style.color = "var(--muted-foreground)";
+          fileCrumbs.appendChild(sep);
+          const target = acc;
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "crumb";
+          b.textContent = p;
+          b.onclick = () => loadFiles(target);
+          fileCrumbs.appendChild(b);
+        }
+      }
+    }
+
+    async function previewFile(relPath) {
+      selectedFile = relPath;
+      previewTitle.textContent = relPath;
+      const rawUrl = "/api/files/raw?path=" + encodeURIComponent(relPath);
+      previewDownload.href = rawUrl + "&download=1";
+      previewDownload.style.display = "inline-block";
+      const ext = (relPath.split(".").pop() || "").toLowerCase();
+      if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) {
+        previewBody.innerHTML = "";
+        const im = document.createElement("img");
+        im.src = rawUrl + "&t=" + Date.now();
+        im.alt = relPath;
+        previewBody.appendChild(im);
+      } else if (ext === "pdf") {
+        previewBody.innerHTML = "";
+        const fr = document.createElement("iframe");
+        fr.src = rawUrl;
+        fr.style.cssText = "width:100%;height:100%;border:0;border-radius:8px;background:#fff;";
+        previewBody.appendChild(fr);
+      } else if (["txt", "md", "json", "log", "csv", "ts", "tsx", "js", "jsx", "py", "sh", "yml", "yaml", "toml", "css", "html", "xml", "env"].includes(ext) || !relPath.includes(".")) {
+        previewBody.innerHTML = '<div class="preview-empty">Loading…</div>';
+        try {
+          const res = await fetch(rawUrl);
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const text = await res.text();
+          previewBody.innerHTML = "";
+          const pre = document.createElement("pre");
+          pre.textContent = text.slice(0, 200000);
+          previewBody.appendChild(pre);
+        } catch (err) {
+          previewBody.innerHTML = '<div class="preview-empty">Failed to load: ' + (err.message || err) + "</div>";
+        }
+      } else {
+        previewBody.innerHTML = '<div class="preview-empty">Binary file — click <strong>Download</strong> above.</div>';
+      }
+      loadFiles(currentDir, true);
+    }
+
+    async function loadFiles(dir = currentDir, skipTitle = false) {
+      currentDir = dir || ".";
+      renderCrumbs(currentDir);
+      try {
+        const res = await fetch("/api/files?path=" + encodeURIComponent(currentDir));
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        filesList.innerHTML = "";
+        if (!data.entries || data.entries.length === 0) {
+          filesList.innerHTML = '<div class="preview-empty" style="padding:24px;">Empty folder</div>';
+        } else {
+          for (const entry of data.entries) {
+            const rel = currentDir === "." ? entry.name : currentDir + "/" + entry.name;
+            const row = document.createElement("div");
+            row.className = "file-row" + (selectedFile === rel ? " active" : "");
+            const left = document.createElement("div");
+            left.className = "file-name";
+            left.textContent = (entry.type === "dir" ? "📁 " : "📄 ") + entry.name;
+            const right = document.createElement("div");
+            right.className = "file-meta";
+            if (entry.type === "file") {
+              const sz = document.createElement("span");
+              sz.textContent = formatBytes(entry.size);
+              right.appendChild(sz);
+              const dl = document.createElement("a");
+              dl.href = "/api/files/raw?path=" + encodeURIComponent(rel) + "&download=1";
+              dl.className = "file-act";
+              dl.textContent = "↓";
+              dl.title = "Download";
+              dl.onclick = (e) => e.stopPropagation();
+              right.appendChild(dl);
+            }
+            const del = document.createElement("button");
+            del.type = "button";
+            del.className = "file-act del";
+            del.textContent = "✕";
+            del.title = "Delete";
+            del.onclick = async (e) => {
+              e.stopPropagation();
+              if (!confirm("Delete " + rel + "?")) return;
+              await fetch("/api/files?path=" + encodeURIComponent(rel), { method: "DELETE" });
+              if (selectedFile === rel) {
+                selectedFile = "";
+                previewTitle.textContent = "Select a file to preview";
+                previewDownload.style.display = "none";
+                previewBody.innerHTML = '<div class="preview-empty">Deleted.</div>';
+              }
+              loadFiles(currentDir);
+            };
+            right.appendChild(del);
+            row.appendChild(left);
+            row.appendChild(right);
+            row.onclick = () => {
+              if (entry.type === "dir") loadFiles(rel);
+              else previewFile(rel);
+            };
+            filesList.appendChild(row);
+          }
+        }
+        if (!skipTitle) statusEl.textContent = "Files · " + currentDir;
+      } catch (err) {
+        statusEl.textContent = "Error: " + (err.message || err);
+      }
+    }
+
+    filesRefreshBtn.addEventListener("click", () => loadFiles(currentDir));
+    fileUploadInput.addEventListener("change", async () => {
+      if (!fileUploadInput.files || fileUploadInput.files.length === 0) return;
+      const fd = new FormData();
+      for (const f of fileUploadInput.files) fd.append("file", f);
+      statusEl.textContent = "Uploading…";
+      await fetch("/api/files/upload?path=" + encodeURIComponent(currentDir), { method: "POST", body: fd });
+      fileUploadInput.value = "";
+      loadFiles(currentDir);
+    });
+
     function setTab(tab) {
       activeTab = tab;
       tabBrowser.className = tab === "browser" ? "tab active" : "tab";
       tabTerminal.className = tab === "terminal" ? "tab active" : "tab";
+      tabFiles.className = tab === "files" ? "tab active" : "tab";
       img.style.display = tab === "browser" ? "block" : "none";
       navForm.style.display = tab === "browser" ? "flex" : "none";
-      refreshBtn.style.display = tab === "browser" ? "inline-block" : "none";
+      refreshBtn.style.display = tab === "browser" ? "inline-flex" : "none";
+      controlBtn.style.display = tab === "files" ? "none" : "inline-block";
       termWrap.style.display = tab === "terminal" ? "block" : "none";
+      filesWrap.style.display = tab === "files" ? "grid" : "none";
       if (tab === "terminal") {
         connectTerminal();
         if (term) term.focus();
+      } else if (tab === "files") {
+        loadFiles(currentDir);
       } else {
         refresh();
       }
@@ -627,6 +835,7 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
 
     tabBrowser.addEventListener("click", () => setTab("browser"));
     tabTerminal.addEventListener("click", () => setTab("terminal"));
+    tabFiles.addEventListener("click", () => setTab("files"));
 
     async function sendAction(path, payload) {
       const res = await fetch(path, {
@@ -995,11 +1204,14 @@ function buildMcpServer(userId: string): McpServer {
   server.registerTool(
     "screenshot",
     {
-      description: "Capture a visual PNG screenshot of the current browser viewport.",
-      inputSchema: {},
+      description:
+        "Capture a visual PNG screenshot of the current browser viewport. Optionally save it to a workspace path so the user can view it in the Files tab.",
+      inputSchema: {
+        path: z.string().optional().describe("Optional workspace path to also save the PNG (e.g. screenshots/page.png)"),
+      },
     },
-    async () => {
-      const res = await sandbox.screenshot(userId);
+    async ({ path: savePath }) => {
+      const res = await sandbox.screenshot(userId, savePath);
       return {
         content: [
           {
@@ -1014,6 +1226,7 @@ function buildMcpServer(userId: string): McpServer {
               width: res.width,
               height: res.height,
               capturedAt: res.capturedAt,
+              ...(res.savedPath ? { savedPath: res.savedPath } : {}),
             }),
           },
         ],
@@ -1318,6 +1531,82 @@ const server = Bun.serve<TerminalSocketData>({
 
     if (req.method === "GET" && url.pathname === "/view/terminal") {
       return renderViewPage(req, uiUserId, "terminal");
+    }
+
+    if (req.method === "GET" && url.pathname === "/view/files") {
+      return renderViewPage(req, uiUserId, "files");
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/files") {
+      try {
+        const dirPath = url.searchParams.get("path") || ".";
+        return Response.json(await sandbox.listDir(uiUserId, dirPath));
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
+      }
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/api/files") {
+      try {
+        const target = url.searchParams.get("path") || "";
+        return Response.json(await sandbox.deletePath(uiUserId, target));
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/files/upload") {
+      try {
+        const dirPath = url.searchParams.get("path") || ".";
+        const form = await req.formData();
+        const uploaded: Array<{ path: string; bytes: number }> = [];
+        for (const val of form.getAll("file")) {
+          if (val instanceof File) {
+            const name = val.name.replace(/[/\\]/g, "_") || "upload.bin";
+            const target = dirPath === "." ? name : `${dirPath}/${name}`;
+            const buf = new Uint8Array(await val.arrayBuffer());
+            uploaded.push(await sandbox.writeFileBytes(uiUserId, target, buf));
+          }
+        }
+        return Response.json({ uploaded });
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
+      }
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/files/raw") {
+      try {
+        const filePath = url.searchParams.get("path") || "";
+        const download = url.searchParams.get("download") === "1";
+        const { path: relPath, bytes } = await sandbox.readFileBytes(uiUserId, filePath);
+        const ext = (relPath.split(".").pop() || "").toLowerCase();
+        const mimeMap: Record<string, string> = {
+          png: "image/png",
+          jpg: "image/jpeg",
+          jpeg: "image/jpeg",
+          gif: "image/gif",
+          webp: "image/webp",
+          svg: "image/svg+xml",
+          pdf: "application/pdf",
+          json: "application/json; charset=utf-8",
+          txt: "text/plain; charset=utf-8",
+          md: "text/plain; charset=utf-8",
+          log: "text/plain; charset=utf-8",
+          csv: "text/csv; charset=utf-8",
+          html: "text/plain; charset=utf-8",
+        };
+        const contentType = mimeMap[ext] || "application/octet-stream";
+        const filename = relPath.split("/").pop() || "file";
+        return new Response(bytes, {
+          headers: {
+            "Content-Type": contentType,
+            "Content-Disposition": `${download ? "attachment" : "inline"}; filename="${filename.replaceAll('"', "")}"`,
+            "Content-Security-Policy": "sandbox",
+          },
+        });
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 404 });
+      }
     }
 
     if (req.method === "GET" && url.pathname === "/view/screenshot") {

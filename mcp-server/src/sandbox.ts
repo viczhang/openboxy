@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 
@@ -222,7 +222,7 @@ export class SandboxManager {
   async listDir(
     rawUserId: string,
     dirPath?: string,
-  ): Promise<{ path: string; entries: Array<{ name: string; type: "dir" | "file"; size: number }> }> {
+  ): Promise<{ path: string; entries: Array<{ name: string; type: "dir" | "file"; size: number; mtimeMs: number }> }> {
     const state = await this.ensureUserState(rawUserId);
     const resolved = this.resolveWorkspacePath(state.workspaceDir, dirPath || ".");
     const items = await readdir(resolved, { withFileTypes: true });
@@ -234,10 +234,45 @@ export class SandboxManager {
           name: item.name,
           type: item.isDirectory() ? ("dir" as const) : ("file" as const),
           size: info?.size ?? 0,
+          mtimeMs: info?.mtimeMs ?? 0,
         };
       }),
     );
+    entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
     return { path: path.relative(state.workspaceDir, resolved) || ".", entries };
+  }
+
+  async readFileBytes(rawUserId: string, filePath: string): Promise<{ path: string; bytes: Buffer; size: number }> {
+    const state = await this.ensureUserState(rawUserId);
+    const resolved = this.resolveWorkspacePath(state.workspaceDir, filePath);
+    const info = await stat(resolved);
+    if (info.isDirectory()) {
+      throw new Error(`Path is a directory: ${filePath}`);
+    }
+    const bytes = await readFile(resolved);
+    return { path: path.relative(state.workspaceDir, resolved), bytes, size: bytes.byteLength };
+  }
+
+  async writeFileBytes(
+    rawUserId: string,
+    filePath: string,
+    data: Uint8Array,
+  ): Promise<{ path: string; bytes: number }> {
+    const state = await this.ensureUserState(rawUserId);
+    const resolved = this.resolveWorkspacePath(state.workspaceDir, filePath);
+    await mkdir(path.dirname(resolved), { recursive: true });
+    await writeFile(resolved, data);
+    return { path: path.relative(state.workspaceDir, resolved), bytes: data.byteLength };
+  }
+
+  async deletePath(rawUserId: string, targetPath: string): Promise<{ deleted: string }> {
+    const state = await this.ensureUserState(rawUserId);
+    const resolved = this.resolveWorkspacePath(state.workspaceDir, targetPath);
+    if (resolved === state.workspaceDir) {
+      throw new Error("Cannot delete workspace root");
+    }
+    await rm(resolved, { recursive: true, force: false });
+    return { deleted: path.relative(state.workspaceDir, resolved) };
   }
 
   async getControl(rawUserId: string): Promise<{ holder: SandboxControlHolder; userId: string }> {
@@ -409,18 +444,27 @@ export class SandboxManager {
 
   async screenshot(
     rawUserId: string,
-  ): Promise<{ base64: string; width: number; height: number; url: string; capturedAt: string }> {
+    savePath?: string,
+  ): Promise<{ base64: string; width: number; height: number; url: string; capturedAt: string; savedPath?: string }> {
     const state = await this.ensureUserState(rawUserId);
     return this.withLock(state, async () => {
       const page = await this.getActivePage(state);
       const buf = await page.screenshot({ type: "png" });
       const vp = page.viewportSize() || { width: 1280, height: 800 };
+      let savedPath: string | undefined;
+      if (savePath && savePath.trim()) {
+        const resolved = this.resolveWorkspacePath(state.workspaceDir, savePath.trim());
+        await mkdir(path.dirname(resolved), { recursive: true });
+        await writeFile(resolved, buf);
+        savedPath = path.relative(state.workspaceDir, resolved);
+      }
       return {
         base64: buf.toString("base64"),
         width: vp.width,
         height: vp.height,
         url: page.url(),
         capturedAt: new Date().toISOString(),
+        ...(savedPath ? { savedPath } : {}),
       };
     });
   }
