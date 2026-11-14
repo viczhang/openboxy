@@ -1,3 +1,0 @@
-ag-ui-antigravity
-fastapi
-uvicorn[standard]
