@@ -1205,13 +1205,17 @@ function buildMcpServer(userId: string): McpServer {
     "screenshot",
     {
       description:
-        "Capture a visual PNG screenshot of the current browser viewport. Optionally save it to a workspace path so the user can view it in the Files tab.",
+        "Capture a visual PNG screenshot of the current browser viewport and save it to the user's workspace (default: screenshots/screenshot-<timestamp>.png) so it can be viewed in the Files tab.",
       inputSchema: {
-        path: z.string().optional().describe("Optional workspace path to also save the PNG (e.g. screenshots/page.png)"),
+        path: z.string().optional().describe("Optional workspace path to save the PNG (defaults to screenshots/screenshot-<timestamp>.png)"),
       },
     },
     async ({ path: savePath }) => {
-      const res = await sandbox.screenshot(userId, savePath);
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const targetPath = savePath && savePath.trim() ? savePath.trim() : `screenshots/screenshot-${stamp}.png`;
+      const res = await sandbox.screenshot(userId, targetPath);
+      const base = PUBLIC_URL || `http://127.0.0.1:${PORT}`;
+      const filesUrl = `${base}/view/files`;
       return {
         content: [
           {
@@ -1226,7 +1230,9 @@ function buildMcpServer(userId: string): McpServer {
               width: res.width,
               height: res.height,
               capturedAt: res.capturedAt,
-              ...(res.savedPath ? { savedPath: res.savedPath } : {}),
+              savedPath: res.savedPath,
+              filesUrl,
+              note: `Saved PNG to workspace at ${res.savedPath}. Tell the user they can view or download it in the Files tab at ${filesUrl}.`,
             }),
           },
         ],
@@ -1237,7 +1243,7 @@ function buildMcpServer(userId: string): McpServer {
   server.registerTool(
     "browser_view",
     {
-      description: "Get the live OpenBoxy UI URL where the user can visually watch or take over the browser.",
+      description: "Get the live OpenBoxy UI URLs (Browser, Terminal, and Files) where the user can visually watch, take over, or browse workspace files.",
       inputSchema: {},
     },
     async () => {
@@ -1246,7 +1252,8 @@ function buildMcpServer(userId: string): McpServer {
         userId,
         url: `${base}/view`,
         terminalUrl: `${base}/view/terminal`,
-        note: "Open the /view URL in a browser (signed in with your API token) to watch or take over your browser.",
+        filesUrl: `${base}/view/files`,
+        note: "Open /view for the live browser, /view/terminal for the shell, or /view/files to view/download saved screenshots and files.",
       });
     },
   );
