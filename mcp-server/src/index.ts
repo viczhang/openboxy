@@ -905,6 +905,138 @@ function buildMcpServer(): McpServer {
   return server;
 }
 
+function injectOpenBoxyShell(rawHtml: string, req: Request): string {
+  const html = rawHtml.replace("<title>OpenBot</title>", "<title>OpenBoxy</title>");
+  const mcpUrl = `${publicOrigin(req)}/mcp`;
+  const mcpName = process.env.OPENBOXY_MCP_NAME?.trim() || "boxy";
+  const opencodeJson = JSON.stringify(
+    {
+      mcp: {
+        [mcpName]: {
+          type: "remote",
+          url: mcpUrl,
+          enabled: true,
+        },
+      },
+    },
+    null,
+    2,
+  );
+  const agentPrompt = `Add the remote Streamable HTTP MCP server "${mcpName}" at ${mcpUrl} (with OAuth) to my MCP client config, then tell me how to finish signing in.`;
+  const snippet = `<div id="openboxy-nav-pill" style="position:fixed;bottom:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:999px;padding:5px 8px;box-shadow:0 8px 24px rgba(0,0,0,0.14);font-family:inherit;font-size:12px;touch-action:none;">
+  <span id="openboxy-drag-handle" title="Drag to move" style="cursor:grab;user-select:none;padding:2px 4px;color:var(--muted-foreground);font-weight:700;letter-spacing:-1px;">&#8942;&#8942;</span>
+  <a href="/view" style="color:var(--primary-foreground);text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--primary);">Live Browser</a>
+  <a href="/view/terminal" style="color:var(--card-foreground);text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--muted);">Terminal</a>
+  <button type="button" onclick="var m=document.getElementById('openboxy-mcp-modal');m.style.display=m.style.display==='grid'?'none':'grid';" style="color:var(--card-foreground);border:1px solid var(--border);cursor:pointer;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--background);font-family:inherit;font-size:12px;">MCP Setup</button>
+</div>
+<div id="openboxy-mcp-modal" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.45);place-items:center;padding:16px;" onclick="if(event.target===this)this.style.display='none';">
+  <div style="width:min(480px,100%);max-height:85vh;overflow:auto;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:14px;padding:18px 20px;box-shadow:0 20px 50px rgba(0,0,0,0.3);font-family:inherit;font-size:13px;line-height:1.45;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <strong style="font-size:15px;color:var(--card-foreground);">Connect MCP (${escapeHtml(mcpName)})</strong>
+      <button type="button" onclick="document.getElementById('openboxy-mcp-modal').style.display='none';" style="background:transparent;border:0;color:var(--muted-foreground);cursor:pointer;font-size:18px;line-height:1;">&times;</button>
+    </div>
+    <div style="margin-bottom:10px;color:var(--muted-foreground);">Endpoint: <code style="background:var(--muted);color:var(--card-foreground);padding:2px 6px;border-radius:6px;">${escapeHtml(mcpUrl)}</code></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:var(--card-foreground);">
+      <span><strong>Option 1 — Paste to an AI Agent</strong> (OpenCode, Claude Code, Cursor, Codex):</span>
+      <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-agent-prompt').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:var(--muted);color:var(--card-foreground);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;font-weight:600;">Copy</button>
+    </div>
+    <pre id="openboxy-agent-prompt" style="margin:0 0 10px 0;padding:8px 10px;background:var(--muted);border:1px solid var(--border);border-radius:10px;white-space:pre-wrap;word-break:break-word;font-size:11px;color:var(--card-foreground);">${escapeHtml(agentPrompt)}</pre>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:var(--card-foreground);">
+      <span><strong>Option 2 — Manual JSON</strong> (<code style="background:var(--muted);padding:1px 5px;border-radius:4px;">~/.config/opencode/opencode.jsonc</code>):</span>
+      <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-mcp-json').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:var(--muted);color:var(--card-foreground);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;font-weight:600;">Copy</button>
+    </div>
+    <pre id="openboxy-mcp-json" style="margin:0 0 8px 0;padding:8px 10px;background:var(--muted);border:1px solid var(--border);border-radius:10px;overflow:auto;font-size:11px;color:var(--card-foreground);">${escapeHtml(opencodeJson)}</pre>
+    <div style="color:var(--muted-foreground);font-size:12px;">Then in OpenCode run <code style="background:var(--muted);color:var(--card-foreground);padding:1px 5px;border-radius:4px;">/mcps</code>, select <strong style="color:var(--card-foreground);">${escapeHtml(mcpName)}</strong>, and sign in with your <code style="background:var(--muted);color:var(--card-foreground);padding:1px 5px;border-radius:4px;">OPENBOXY_MCP_TOKEN</code>.</div>
+  </div>
+</div>
+<script>
+  (function () {
+    function rebrand() {
+      if (document.title.indexOf("OpenBot") !== -1) {
+        document.title = document.title.replace(/\\bOpenBot\\b/g, "OpenBoxy");
+      }
+      var marks = document.querySelectorAll('[data-slot="trademark"]');
+      for (var i = 0; i < marks.length; i++) {
+        var sup = marks[i];
+        var parent = sup.parentElement;
+        sup.remove();
+        if (parent) {
+          for (var j = 0; j < parent.childNodes.length; j++) {
+            var n = parent.childNodes[j];
+            if (n.nodeType === 3 && n.nodeValue && n.nodeValue.indexOf("OpenBot") !== -1) {
+              n.nodeValue = n.nodeValue.replace(/\\bOpenBot\\b/g, "OpenBoxy");
+            }
+          }
+        }
+      }
+    }
+    rebrand();
+    new MutationObserver(rebrand).observe(document.documentElement, { childList: true, subtree: true });
+
+    var pill = document.getElementById("openboxy-nav-pill");
+    var handle = document.getElementById("openboxy-drag-handle");
+    if (pill && handle) {
+      function clampPos(left, top) {
+        var r = pill.getBoundingClientRect();
+        var maxL = Math.max(8, window.innerWidth - r.width - 8);
+        var maxT = Math.max(8, window.innerHeight - r.height - 8);
+        return {
+          left: Math.min(Math.max(8, left), maxL),
+          top: Math.min(Math.max(8, top), maxT),
+        };
+      }
+      function applyPos(left, top) {
+        var p = clampPos(left, top);
+        pill.style.left = p.left + "px";
+        pill.style.top = p.top + "px";
+        pill.style.right = "auto";
+        pill.style.bottom = "auto";
+        return p;
+      }
+      try {
+        var saved = JSON.parse(window.localStorage.getItem("openboxy-pill-pos") || "null");
+        if (saved && typeof saved.left === "number" && typeof saved.top === "number") {
+          applyPos(saved.left, saved.top);
+        }
+      } catch {}
+      var dragging = false, startX = 0, startY = 0, origLeft = 0, origTop = 0;
+      handle.addEventListener("pointerdown", function (e) {
+        dragging = true;
+        handle.style.cursor = "grabbing";
+        var r = pill.getBoundingClientRect();
+        startX = e.clientX;
+        startY = e.clientY;
+        origLeft = r.left;
+        origTop = r.top;
+        handle.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      });
+      handle.addEventListener("pointermove", function (e) {
+        if (!dragging) return;
+        applyPos(origLeft + (e.clientX - startX), origTop + (e.clientY - startY));
+      });
+      function stopDrag(e) {
+        if (!dragging) return;
+        dragging = false;
+        handle.style.cursor = "grab";
+        var r = pill.getBoundingClientRect();
+        try { window.localStorage.setItem("openboxy-pill-pos", JSON.stringify({ left: r.left, top: r.top })); } catch {}
+        try { handle.releasePointerCapture(e.pointerId); } catch {}
+      }
+      handle.addEventListener("pointerup", stopDrag);
+      handle.addEventListener("pointercancel", stopDrag);
+      window.addEventListener("resize", function () {
+        if (pill.style.left && pill.style.left !== "auto") {
+          var r = pill.getBoundingClientRect();
+          applyPos(r.left, r.top);
+        }
+      });
+    }
+  })();
+</script>`;
+  return html.includes("</body>") ? html.replace("</body>", `${snippet}</body>`) : `${html}${snippet}`;
+}
+
 const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer)[]; uiPath?: string }>({
   port: PORT,
   idleTimeout: 255,
@@ -962,97 +1094,6 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
 
     if (req.method === "GET" && url.pathname === "/health") {
       return Response.json({ status: "ok", service: "openboxy-mcp" });
-    }
-
-    if (req.method === "GET" && url.pathname === "/") {
-      if (!uiAuthorized(req)) {
-        return new Response(null, {
-          status: 302,
-          headers: { Location: "/login?next=%2F" },
-        });
-      }
-      const upstream = await fetch(`${UI_URL}/`, {
-        headers: {
-          host: "localhost:3001",
-          origin: "http://localhost:3001",
-          "accept-encoding": "identity",
-        },
-      });
-      const ct = upstream.headers.get("content-type") || "";
-      if (!upstream.ok || !ct.includes("text/html")) {
-        return upstream;
-      }
-      const html = (await upstream.text()).replace("<title>OpenBot</title>", "<title>OpenBoxy</title>");
-      const mcpUrl = `${publicOrigin(req)}/mcp`;
-      const mcpName = process.env.OPENBOXY_MCP_NAME?.trim() || "boxy";
-      const opencodeJson = JSON.stringify(
-        {
-          mcp: {
-            [mcpName]: {
-              type: "remote",
-              url: mcpUrl,
-              enabled: true,
-            },
-          },
-        },
-        null,
-        2,
-      );
-      const agentPrompt = `Add the remote Streamable HTTP MCP server "${mcpName}" at ${mcpUrl} (with OAuth) to my MCP client config, then tell me how to finish signing in.`;
-      const pill = `<div id="openboxy-nav-pill" style="position:fixed;bottom:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:999px;padding:5px 8px;box-shadow:0 8px 24px rgba(0,0,0,0.14);font-family:inherit;font-size:12px;">
-  <a href="/view" style="color:var(--primary-foreground);text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--primary);">Live Browser</a>
-  <a href="/view/terminal" style="color:var(--card-foreground);text-decoration:none;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--muted);">Terminal</a>
-  <button type="button" onclick="var m=document.getElementById('openboxy-mcp-modal');m.style.display=m.style.display==='block'?'none':'block';" style="color:var(--card-foreground);border:1px solid var(--border);cursor:pointer;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--background);font-family:inherit;font-size:12px;">MCP Setup</button>
-</div>
-<div id="openboxy-mcp-modal" style="display:none;position:fixed;bottom:56px;right:14px;z-index:99999;width:min(480px,calc(100vw - 28px));max-height:80vh;overflow:auto;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:14px;padding:16px 18px;box-shadow:0 16px 40px rgba(0,0,0,0.22);font-family:inherit;font-size:13px;line-height:1.45;">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-    <strong style="font-size:14px;color:var(--card-foreground);">Connect MCP (${escapeHtml(mcpName)})</strong>
-    <button type="button" onclick="document.getElementById('openboxy-mcp-modal').style.display='none';" style="background:transparent;border:0;color:var(--muted-foreground);cursor:pointer;font-size:18px;line-height:1;">&times;</button>
-  </div>
-  <div style="margin-bottom:10px;color:var(--muted-foreground);">Endpoint: <code style="background:var(--muted);color:var(--card-foreground);padding:2px 6px;border-radius:6px;">${escapeHtml(mcpUrl)}</code></div>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:var(--card-foreground);">
-    <span><strong>Option 1 — Paste to an AI Agent</strong> (OpenCode, Claude Code, Cursor, Codex):</span>
-    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-agent-prompt').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:var(--muted);color:var(--card-foreground);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;font-weight:600;">Copy</button>
-  </div>
-  <pre id="openboxy-agent-prompt" style="margin:0 0 10px 0;padding:8px 10px;background:var(--muted);border:1px solid var(--border);border-radius:10px;white-space:pre-wrap;word-break:break-word;font-size:11px;color:var(--card-foreground);">${escapeHtml(agentPrompt)}</pre>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:var(--card-foreground);">
-    <span><strong>Option 2 — Manual JSON</strong> (<code style="background:var(--muted);padding:1px 5px;border-radius:4px;">~/.config/opencode/opencode.jsonc</code>):</span>
-    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('openboxy-mcp-json').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);" style="background:var(--muted);color:var(--card-foreground);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;font-weight:600;">Copy</button>
-  </div>
-  <pre id="openboxy-mcp-json" style="margin:0 0 8px 0;padding:8px 10px;background:var(--muted);border:1px solid var(--border);border-radius:10px;overflow:auto;font-size:11px;color:var(--card-foreground);">${escapeHtml(opencodeJson)}</pre>
-  <div style="color:var(--muted-foreground);font-size:12px;">Then in OpenCode run <code style="background:var(--muted);color:var(--card-foreground);padding:1px 5px;border-radius:4px;">/mcps</code>, select <strong style="color:var(--card-foreground);">${escapeHtml(mcpName)}</strong>, and sign in with your <code style="background:var(--muted);color:var(--card-foreground);padding:1px 5px;border-radius:4px;">OPENBOXY_MCP_TOKEN</code>.</div>
-</div>
-<script>
-  (function () {
-    function rebrand() {
-      if (document.title.indexOf("OpenBot") !== -1) {
-        document.title = document.title.replace(/\\bOpenBot\\b/g, "OpenBoxy");
-      }
-      var marks = document.querySelectorAll('[data-slot="trademark"]');
-      for (var i = 0; i < marks.length; i++) {
-        var sup = marks[i];
-        var parent = sup.parentElement;
-        sup.remove();
-        if (parent) {
-          for (var j = 0; j < parent.childNodes.length; j++) {
-            var n = parent.childNodes[j];
-            if (n.nodeType === 3 && n.nodeValue && n.nodeValue.indexOf("OpenBot") !== -1) {
-              n.nodeValue = n.nodeValue.replace(/\\bOpenBot\\b/g, "OpenBoxy");
-            }
-          }
-        }
-      }
-    }
-    rebrand();
-    new MutationObserver(rebrand).observe(document.documentElement, { childList: true, subtree: true });
-  })();
-</script>`;
-      const patched = html.includes("</body>")
-        ? html.replace("</body>", `${pill}</body>`)
-        : `${html}${pill}`;
-      const headers = new Headers(upstream.headers);
-      headers.delete("content-length");
-      return new Response(patched, { status: upstream.status, headers });
     }
 
     if (url.pathname === "/view" || url.pathname.startsWith("/view/")) {
@@ -1401,12 +1442,22 @@ const server = Bun.serve<{ upstream: WebSocket | null; pending: (string | Buffer
     const fwdHeaders = new Headers(req.headers);
     fwdHeaders.set("host", "localhost:3001");
     fwdHeaders.set("origin", "http://localhost:3001");
+    if (req.method === "GET") {
+      fwdHeaders.set("accept-encoding", "identity");
+    }
     const upstream = await fetch(`${UI_URL}${url.pathname}${url.search}`, {
       method: req.method,
       headers: fwdHeaders,
       body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
       redirect: "manual",
     });
+    const ct = upstream.headers.get("content-type") || "";
+    if (req.method === "GET" && upstream.ok && ct.includes("text/html")) {
+      const patched = injectOpenBoxyShell(await upstream.text(), req);
+      const headers = new Headers(upstream.headers);
+      headers.delete("content-length");
+      return new Response(patched, { status: upstream.status, headers });
+    }
     return new Response(upstream.body, {
       status: upstream.status,
       headers: upstream.headers,
