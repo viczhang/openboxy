@@ -378,6 +378,35 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     2,
   );
   const codexToml = `[mcp_servers.${mcpName}]\nurl = "${mcpUrl}"`;
+  const vscodeJson = JSON.stringify(
+    {
+      servers: {
+        [mcpName]: {
+          type: "http",
+          url: mcpUrl,
+        },
+      },
+    },
+    null,
+    2,
+  );
+  const workbuddyJson = JSON.stringify(
+    {
+      mcpServers: {
+        [mcpName]: {
+          transport: "http",
+          url: mcpUrl,
+          headers: {
+            Authorization: "Bearer YOUR_API_TOKEN",
+          },
+        },
+      },
+    },
+    null,
+    2,
+  );
+  const hermesYaml = `mcp_servers:\n  ${mcpName}:\n    url: "${mcpUrl}"\n    transport: "streamable"\n    enabled: true\n    headers:\n      Authorization: "Bearer \${env:OPENBOXY_MCP_TOKEN}"`;
+  const deepseekYaml = `- id: mcp-${mcpName}\n  name: '@deepseek-ai/dsh-mcp-client'\n  config:\n    serverName: ${mcpName}\n    transport: streamable-http\n    url: ${mcpUrl}\n    headers:\n      Authorization: !!js '\`Bearer \${process.env.OPENBOXY_MCP_TOKEN}\`'`;
   const agentPrompt = `Add the remote Streamable HTTP MCP server "${mcpName}" at ${mcpUrl} (with OAuth) to my MCP client config, then tell me how to finish signing in.`;
   const showLogout = UI_AUTH !== "off" && UI_AUTH !== "none" && UI_AUTH !== "false";
 
@@ -549,7 +578,11 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
         <button type="button" class="mcp-pill" data-mcp-client="codex">Codex</button>
         <button type="button" class="mcp-pill" data-mcp-client="gemini-cli">Gemini CLI</button>
         <button type="button" class="mcp-pill" data-mcp-client="cursor">Cursor</button>
+        <button type="button" class="mcp-pill" data-mcp-client="vscode">VS Code</button>
         <button type="button" class="mcp-pill" data-mcp-client="openclaw">OpenClaw</button>
+        <button type="button" class="mcp-pill" data-mcp-client="hermes">Hermes</button>
+        <button type="button" class="mcp-pill" data-mcp-client="deepseek">DeepSeek Harness</button>
+        <button type="button" class="mcp-pill" data-mcp-client="workbuddy">WorkBuddy</button>
         <button type="button" class="mcp-pill" data-mcp-client="chatgpt">ChatGPT</button>
         <button type="button" class="mcp-pill" data-mcp-client="claude">Claude</button>
         <button type="button" class="mcp-pill" data-mcp-client="gemini">Gemini</button>
@@ -653,6 +686,41 @@ codex mcp login ${escapeHtml(mcpName)}</pre>
           <li>Select <strong>Add custom app / MCP Server URL</strong>.</li>
           <li>Paste <code>${escapeHtml(mcpUrl)}</code> and complete OAuth sign-in with your API token.</li>
         </ol>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="vscode">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span>Add to <code>.vscode/mcp.json</code> (or Command Palette &rarr; <strong>MCP: Add Server</strong> &rarr; <strong>HTTP</strong>):</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxVscodeJson').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxVscodeJson">${escapeHtml(vscodeJson)}</pre>
+        <div style="color:var(--muted-foreground);font-size:12px;">VS Code discovers OAuth automatically and opens your browser to sign in with your API token.</div>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="hermes">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span>Add to <code>~/.hermes/config.yaml</code> (and set <code>OPENBOXY_MCP_TOKEN</code> in <code>~/.hermes/.env</code>):</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxHermesYaml').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxHermesYaml">${escapeHtml(hermesYaml)}</pre>
+        <div style="color:var(--muted-foreground);font-size:12px;">Restart <code>hermes chat</code> to load the remote tools.</div>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="deepseek">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span>Add to your DeepSeek Harness config (with <code>OPENBOXY_MCP_TOKEN</code> set in env):</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxDeepseekYaml').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxDeepseekYaml">${escapeHtml(deepseekYaml)}</pre>
+      </div>
+
+      <div class="mcp-panel" data-mcp-panel="workbuddy">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span>Add to <code>~/.codebuddy/.mcp.json</code> (or <strong>Plugins &rarr; MCP Server &rarr; Configure MCP</strong>):</span>
+          <button type="button" class="sec" style="padding:3px 9px;font-size:11px;" onclick="navigator.clipboard.writeText(document.getElementById('obxWorkbuddyJson').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);">Copy</button>
+        </div>
+        <pre id="obxWorkbuddyJson">${escapeHtml(workbuddyJson)}</pre>
+        <div style="color:var(--muted-foreground);font-size:12px;">Replace <code>YOUR_API_TOKEN</code> with your API access token.</div>
       </div>
 
       <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px;">
