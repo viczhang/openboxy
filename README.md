@@ -15,7 +15,29 @@ External AI clients (OpenCode, Claude Code, Cursor, Codex, etc.) connect over MC
 
 ---
 
-## Quick Start
+## Hardware Requirements
+
+| Tier | CPU | RAM | Disk | Notes |
+| --- | --- | --- | --- | --- |
+| **Minimum** | 2 vCPU | **2 GB** (+ 2 GB swap) | 10 GB | Runs `openboxy` + `openboxy-mcp` with light browsing. Swap helps absorb Chromium spikes on heavy sites. |
+| **Recommended** | 2–4 vCPU | **4 GB+** | 20 GB+ SSD | Smooth multi-tab Chromium browsing and fast local ARM64/MCP Docker builds. |
+
+- **Supported architectures:** `linux/amd64` (prebuilt image) and `linux/arm64` (single local `docker build`).
+- **Measured footprint:** ~390–420 MiB idle; **~970 MiB** active with a heavy webpage open in Chromium (`openboxy` ~949 MiB + `openboxy-mcp` ~21 MiB).
+
+---
+
+## Deploy with an AI Agent
+
+This repo includes [`AGENTS.md`](./AGENTS.md) so coding agents (OpenCode, Claude Code, Codex, Cursor, Antigravity) can deploy and verify it autonomously on your server.
+
+Paste this prompt to an agent running on your target machine:
+
+> Clone `https://github.com/viczhang/openboxy`, read `AGENTS.md` and `README.md`, and deploy OpenBoxy on this server. Generate fresh secrets in `.env`, build/start the containers (building `openbot-local` first if ARM64), verify `/health` and `/mcp`, and configure HTTPS reverse proxy for `<your-domain>` with Basic Auth on `/` and `/view*`.
+
+---
+
+## Quick Start (Manual)
 
 1. **Create `.env` from the example:**
    ```bash
