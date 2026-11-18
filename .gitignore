@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.openboxy.example
+docker-compose.caddy.yml
+/plugins/
+node_modules
+**/dist/
+.logs/

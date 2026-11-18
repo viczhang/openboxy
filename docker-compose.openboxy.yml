@@ -1,0 +1,21 @@
+services:
+  openboxy-mcp:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    image: openboxy-mcp:local
+    container_name: openboxy-mcp
+    restart: unless-stopped
+    shm_size: "1gb"
+    env_file:
+      - .env
+    environment:
+      - MCP_PORT=3100
+      - DATA_DIR=/data
+    ports:
+      - "${OPENBOXY_MCP_BIND:-127.0.0.1:3100}:3100"
+    volumes:
+      - openboxy-data:/data
+
+volumes:
+  openboxy-data:
