@@ -152,6 +152,8 @@ export function renderBookmarksPage(rawUserId: string, pluginLinks: PluginHomeLi
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Home · OpenBoxy</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="256x256" href="/icon.png" />
+  <link rel="apple-touch-icon" sizes="256x256" href="/apple-touch-icon.png" />
   <style>
     :root {
       --bg: #f8fafc;

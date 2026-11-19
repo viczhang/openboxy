@@ -6,8 +6,10 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { z } from "zod";
 import { deleteBookmark, listBookmarks, renderBookmarksPage, upsertBookmark } from "./bookmarks.ts";
 import { getPluginExtensionDirs, getPluginHomeLinks, getPluginProxyUrl, handlePluginHttp, loadPlugins, registerPluginTools, type OpenBoxyPlugin } from "./plugins.ts";
+import { extractReadableArticleHtml } from "./readability.ts";
 import { SandboxManager, sanitizeUserId } from "./sandbox.ts";
 import {
+  renderAppPlayerPage,
   renderShareNotFoundPage,
   renderSharePasswordPage,
   renderShareViewerPage,
@@ -304,10 +306,15 @@ const OPENBOXY_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0
   <line class="box-line" x1="16" y1="7.5" x2="16" y2="27.5" />
 </svg>`;
 
+const OPENBOXY_ICON_PNG = readFileSync(path.join(import.meta.dir, "icon.png"));
+const OPENBOXY_FAVICON_ICO = readFileSync(path.join(import.meta.dir, "favicon.ico"));
+
 const OPENBOXY_LOGO_SVG = `<svg class="obx-logo" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6.5,10.7 3.2,7.2 12.6,4.2 16,7.5"/><polygon points="25.5,10.7 28.8,7.2 19.4,4.2 16,7.5"/><polygon points="6.5,10.7 4.0,14.2 13.2,17.5 16,13.9"/><polygon points="25.5,10.7 28.0,14.2 18.8,17.5 16,13.9"/><polyline points="6.5,15.1 6.5,23.8 16,27.5 25.5,23.8 25.5,15.1"/><line x1="16" y1="7.5" x2="16" y2="27.5"/></svg>`;
 
 const OPENBOXY_THEME_HEAD = `
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="256x256" href="/icon.png" />
+  <link rel="apple-touch-icon" sizes="256x256" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.2.5/index.css" />
   <script>
     (function () {
@@ -574,8 +581,8 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
   ${OPENBOXY_THEME_HEAD}
   <style>
-    body { display: flex; flex-direction: column; height: 100vh; }
-    header { display: flex; gap: 10px; align-items: center; padding: 8px 14px; background: var(--card); border-bottom: 1px solid var(--border); flex-wrap: nowrap; min-height: 50px; }
+    body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
+    header { display: flex; gap: 10px; align-items: center; padding: 8px 14px; background: var(--card); border-bottom: 1px solid var(--border); flex-wrap: nowrap; min-height: 50px; flex-shrink: 0; }
     .brand { display: inline-flex; align-items: center; gap: 6px; color: var(--card-foreground); text-decoration: none; font-size: 14px; font-weight: 600; letter-spacing: -0.05em; line-height: 1.25; padding: 5px 8px; border-radius: 8px; flex-shrink: 0; }
     .brand .obx-logo { width: 18px; height: 18px; flex-shrink: 0; }
     .brand:hover { background: var(--muted); }
@@ -586,7 +593,7 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     .url-bar { display: flex; flex: 1; align-items: center; gap: 4px; min-width: 140px; max-width: 680px; background: var(--background); border: 1px solid var(--border); border-radius: 9px; padding: 2px 4px 2px 10px; }
     .url-bar:focus-within { border-color: var(--primary); }
     .url-bar input[type="text"] { flex: 1; min-width: 0; padding: 4px 0; border: 0; background: transparent; color: var(--card-foreground); font-size: 12.5px; outline: none; }
-    .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 0; background: transparent; color: var(--muted-foreground); cursor: pointer; font-size: 14px; }
+    .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 0; background: transparent; color: var(--muted-foreground); cursor: pointer; font-size: 14px; flex-shrink: 0; }
     .icon-btn:hover { background: var(--muted); color: var(--card-foreground); }
     .go-btn { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--muted); color: var(--card-foreground); font-weight: 600; font-size: 11.5px; cursor: pointer; line-height: 1.2; flex-shrink: 0; }
     .go-btn:hover { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); opacity: 1; }
@@ -611,18 +618,17 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     #ctxMenu { display: none; position: fixed; z-index: 99999; min-width: 190px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 5px; box-shadow: 0 14px 36px rgba(0,0,0,.22); flex-direction: column; gap: 2px; }
     #ctxMenu.open { display: flex; }
     .ctx-sep { height: 1px; background: var(--border); margin: 3px 6px; }
-    @media (max-width: 720px) { .meta { display: none; } header { gap: 6px; padding: 8px 10px; } }
-    main { flex: 1; display: grid; place-items: center; overflow: auto; padding: 12px; position: relative; }
-    img { max-width: 100%; max-height: calc(100vh - 76px); border: 2px solid var(--border); border-radius: 12px; background: #fff; box-shadow: 0 10px 28px rgba(0,0,0,.12); outline: none; display: block; }
+    main { flex: 1; min-height: 0; display: grid; place-items: center; overflow: auto; padding: 12px; position: relative; }
+    img { max-width: 100%; max-height: calc(100dvh - 76px); border: 2px solid var(--border); border-radius: 12px; background: #fff; box-shadow: 0 10px 28px rgba(0,0,0,.12); outline: none; display: block; }
     .dark img { box-shadow: 0 12px 32px rgba(0,0,0,.45); }
     img.controlling { border-color: #22c55e; cursor: crosshair; touch-action: none; user-select: none; }
-    #browserStage { display: flex; flex-direction: column; gap: 6px; max-width: 100%; max-height: calc(100vh - 76px); }
-    #browserStage img { max-height: calc(100vh - 116px); }
+    #browserStage { display: flex; flex-direction: column; gap: 6px; width: 100%; height: 100%; max-width: 100%; max-height: calc(100dvh - 76px); min-height: 0; }
+    #browserStage img { max-height: calc(100dvh - 116px); margin: 0 auto; }
     body.obx-fs header, body.obx-fs .browser-tabs-row { display: none !important; }
     body.obx-fs main { padding: 0; overflow: hidden; }
-    body.obx-fs #browserStage { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; gap: 0; }
+    body.obx-fs #browserStage { width: 100vw; height: 100dvh; max-width: 100vw; max-height: 100dvh; gap: 0; }
     body.obx-fs #browserWrap { width: 100%; height: 100%; align-items: center; justify-content: center; background: #000; }
-    body.obx-fs #browserStage img { max-width: 100vw; max-height: 100vh; width: auto; height: auto; border-radius: 0; border: 0; box-shadow: none; }
+    body.obx-fs #browserStage img { max-width: 100vw; max-height: 100dvh; width: auto; height: auto; border-radius: 0; border: 0; box-shadow: none; }
     #fsExitBtn { display: none; position: fixed; top: 10px; right: 12px; z-index: 99990; padding: 6px 11px; border-radius: 9px; border: 1px solid var(--border); background: var(--card); color: var(--card-foreground); font-size: 12px; font-weight: 600; opacity: 0.78; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
     #fsExitBtn:hover { opacity: 1; }
     body.obx-fs #fsExitBtn { display: inline-flex; align-items: center; gap: 5px; }
@@ -635,7 +641,7 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     .btab-close:hover { opacity: 1; background: var(--border); }
     .btab-add { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border-radius: 7px; border: 1px solid var(--border); background: var(--card); color: var(--card-foreground); font-size: 15px; line-height: 1; cursor: pointer; flex-shrink: 0; }
     .btab-add:hover { background: var(--muted); }
-    #browserWrap { position: relative; display: flex; align-items: stretch; gap: 8px; max-width: 100%; min-height: 0; flex: 1; }
+    #browserWrap { position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; max-width: 100%; min-height: 0; flex: 1; }
     #bookmarksOverlay { display: none; position: absolute; inset: 0; z-index: 20; background: var(--card); border: 2px solid var(--border); border-radius: 12px; padding: 28px; overflow: auto; }
     .bm-wrap { max-width: 860px; margin: 0 auto; }
     .home-status-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-bottom: 22px; }
@@ -666,7 +672,7 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     #termWrap.controlling { border-color: #22c55e; }
     #terminal { width: 100%; height: 100%; }
     #filesWrap { display: none; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(260px, 380px) 1fr; gap: 12px; }
-    @media (max-width: 820px) { #filesWrap { grid-template-columns: 1fr; grid-template-rows: 260px 1fr; } }
+    #filesListToggleBtn { display: none; }
     .files-panel, .preview-panel { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; min-height: 0; }
     .files-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--muted); font-size: 12px; }
     .crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
@@ -691,8 +697,8 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     .share-input { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--background); color: var(--card-foreground); font-size: 13px; margin: 6px 0 14px; outline: none; }
     .share-input:focus { border-color: var(--primary); }
     .preview-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 14px; display: flex; align-items: center; justify-content: center; }
-    .preview-body img { max-width: 100%; max-height: calc(100vh - 148px); object-fit: contain; border: 1px solid var(--border); border-radius: 8px; box-shadow: none; }
-    .preview-body video { max-width: 100%; max-height: calc(100vh - 148px); width: auto; height: auto; object-fit: contain; border-radius: 10px; background: #000; }
+    .preview-body img { max-width: 100%; max-height: 100%; object-fit: contain; border: 1px solid var(--border); border-radius: 8px; box-shadow: none; }
+    .preview-body video { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; border-radius: 10px; background: #000; }
     .preview-body pre { width: 100%; height: 100%; margin: 0; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--card-foreground); }
     .preview-empty { color: var(--muted-foreground); font-size: 13px; text-align: center; }
     .audio-card { width: min(460px, 100%); background: var(--muted); border: 1px solid var(--border); border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
@@ -715,6 +721,61 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
     .mcp-panel.active { display: block; }
     .mcp-steps { margin: 6px 0 10px; padding-left: 18px; color: var(--muted-foreground); }
     .mcp-steps li { margin-bottom: 4px; }
+    #handoffBanner { display: none; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 9px 14px; background: color-mix(in oklch, #d97706 16%, var(--card)); border-bottom: 1px solid color-mix(in oklch, #d97706 45%, var(--border)); color: var(--card-foreground); font-size: 13px; flex-shrink: 0; }
+    #handoffBanner.open { display: flex; }
+    .handoff-text { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+    .handoff-badge { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 999px; background: #d97706; color: #fff; font-size: 11px; font-weight: 700; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.03em; }
+    .handoff-reason { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+    .handoff-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    body.obx-fs #handoffBanner { display: none !important; }
+    @media (max-width: 820px) {
+      #filesWrap { grid-template-columns: 1fr; grid-template-rows: minmax(150px, 32vh) 1fr; gap: 8px; }
+      #filesWrap.mobile-preview-max { grid-template-rows: 1fr; }
+      #filesWrap.mobile-preview-max .files-panel { display: none; }
+      #filesListToggleBtn { display: inline-block; }
+    }
+    @media (max-width: 768px) {
+      .meta { display: none; }
+      header { flex-wrap: wrap; gap: 6px; padding: 8px 10px; min-height: 0; }
+      .brand { padding: 4px 6px; }
+      .tabs { padding: 2px; }
+      .tab { padding: 5px 10px; font-size: 12px; }
+      .actions { gap: 6px; margin-left: auto; }
+      #controlBtn { padding: 6px 10px; font-size: 12px; }
+      .menu-btn { padding: 6px 9px; }
+      .nav-btns { order: 3; }
+      .url-bar { order: 4; flex: 1 1 calc(100% - 108px); min-width: 170px; max-width: none; padding: 2px 4px 2px 8px; }
+      .url-bar input[type="text"], .bm-editor input, .share-input { font-size: 16px; }
+      .icon-btn { width: 32px; height: 32px; }
+      .go-btn { padding: 5px 10px; font-size: 12px; }
+      main { padding: 6px; }
+      #browserStage { max-height: none; height: 100%; gap: 5px; }
+      #browserStage img { align-self: center; max-width: 100%; max-height: 100%; width: auto; height: auto; }
+      #bookmarksOverlay { padding: 14px; border-radius: 10px; }
+      .home-status-bar { grid-template-columns: 1fr; gap: 6px; margin-bottom: 14px; }
+      .home-stat { padding: 8px 11px; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; }
+      .home-stat-val { font-size: 12.5px; }
+      .bm-top { margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+      .bm-top h2 { font-size: 17px; }
+      .bm-sub { font-size: 11.5px; }
+      .bm-grid { grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 8px; }
+      .bm-card { padding: 10px; gap: 9px; }
+      .bm-ico { width: 30px; height: 30px; font-size: 13px; }
+      .bm-act { width: 26px; height: 26px; }
+      .btab { padding: 5px 9px; font-size: 12px; max-width: 155px; }
+      .btab-close { width: 18px; height: 18px; }
+      .btab-add { width: 28px; height: 28px; }
+      #termWrap { padding: 6px; border-radius: 10px; }
+      .files-bar { padding: 7px 10px; flex-wrap: wrap; gap: 6px; }
+      .file-row { padding: 9px 10px; }
+      .file-act { padding: 4px 7px; font-size: 13px; }
+      .preview-body { padding: 8px; }
+    }
+    @media (max-width: 480px) {
+      .brand span { display: none; }
+      .tab { padding: 5px 8px; font-size: 11.5px; }
+      #controlBtn { padding: 5px 8px; font-size: 11.5px; }
+    }
   </style>
 </head>
 <body>
@@ -756,6 +817,16 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
       </div>
     </div>
   </header>
+  <div id="handoffBanner" role="alert">
+    <div class="handoff-text">
+      <span class="handoff-badge">Action Needed</span>
+      <span class="handoff-reason" id="handoffReason"></span>
+    </div>
+    <div class="handoff-actions">
+      <button type="button" class="sec" id="handoffBrowserBtn" style="display:none;padding:5px 10px;font-size:12px;">Open Browser</button>
+      <button type="button" class="release" id="handoffResumeBtn" style="padding:5px 12px;font-size:12px;">Done — Resume Agent</button>
+    </div>
+  </div>
   <main>
     <div id="ctxMenu" role="menu"></div>
     <button type="button" id="fsExitBtn" title="Exit Full Screen">&#x2715; Exit Full Screen</button>
@@ -840,6 +911,7 @@ function renderViewPage(req: Request, userId: string, initialTab: "browser" | "t
         <div class="files-bar">
           <span id="previewTitle" style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Select a file to preview</span>
           <div style="display:flex;gap:4px;flex-shrink:0;">
+            <button id="filesListToggleBtn" class="sec" type="button" style="padding:4px 8px;font-size:11.5px;" title="Toggle file list">Expand</button>
             <button id="previewListenBtn" class="sec" type="button" style="display:none;padding:4px 8px;font-size:11.5px;">&#127911; Listen</button>
             <button id="previewShareBtn" class="sec" type="button" style="display:none;padding:4px 8px;font-size:11.5px;">Share</button>
             <a id="previewDownload" href="#" style="display:none;text-decoration:none;"><button class="sec" type="button" style="padding:4px 8px;font-size:11.5px;">Download</button></a>
@@ -1135,6 +1207,11 @@ codex mcp login ${escapeHtml(mcpName)}</pre>
     const filesList = document.getElementById("filesList");
     const filesRefreshBtn = document.getElementById("filesRefreshBtn");
     const fileUploadInput = document.getElementById("fileUploadInput");
+    const filesListToggleBtn = document.getElementById("filesListToggleBtn");
+    filesListToggleBtn.addEventListener("click", () => {
+      const expanded = filesWrap.classList.toggle("mobile-preview-max");
+      filesListToggleBtn.textContent = expanded ? "Files ▾" : "Expand";
+    });
     const previewTitle = document.getElementById("previewTitle");
     const previewListenBtn = document.getElementById("previewListenBtn");
     const previewTtsBar = document.getElementById("previewTtsBar");
@@ -1214,13 +1291,42 @@ codex mcp login ${escapeHtml(mcpName)}</pre>
       });
     });
 
+    const handoffBanner = document.getElementById("handoffBanner");
+    const handoffReason = document.getElementById("handoffReason");
+    const handoffBrowserBtn = document.getElementById("handoffBrowserBtn");
+    const handoffResumeBtn = document.getElementById("handoffResumeBtn");
+
     function updateControlUi(state) {
       controlling = state && state.holder === "human";
       controlBtn.textContent = controlling ? "Release Control" : "Take Control";
       controlBtn.className = controlling ? "release" : "take";
       img.className = controlling ? "controlling" : "";
       termWrap.className = controlling ? "controlling" : "";
+      const ho = state && state.handoff && state.handoff.status === "waiting" ? state.handoff : null;
+      if (ho) {
+        handoffReason.textContent = ho.reason || "Please complete the required step in the browser.";
+        handoffBrowserBtn.style.display = activeTab === "browser" ? "none" : "inline-block";
+        handoffBanner.classList.add("open");
+      } else {
+        handoffBanner.classList.remove("open");
+      }
     }
+
+    handoffBrowserBtn.addEventListener("click", () => {
+      setTab("browser");
+      handoffBrowserBtn.style.display = "none";
+    });
+    handoffResumeBtn.addEventListener("click", async () => {
+      try {
+        statusEl.textContent = "Resuming agent…";
+        const state = await sendAction("/view/control/release", {});
+        updateControlUi(state);
+        if (activeTab === "browser") await refresh();
+        else statusEl.textContent = new Date().toLocaleTimeString();
+      } catch (err) {
+        statusEl.textContent = "Error: " + (err.message || err);
+      }
+    });
 
     async function syncControl() {
       try {
@@ -1575,30 +1681,92 @@ codex mcp login ${escapeHtml(mcpName)}</pre>
       if (selectedFile) openShareModal(selectedFile, fileSharesByPath[selectedFile] || null);
     });
 
+    function getSavedAudioSpeed() {
+      try {
+        const v = parseFloat(window.localStorage.getItem("openboxy-audio-speed") || "");
+        if (Number.isFinite(v) && v >= 0.5 && v <= 3) return v;
+      } catch {}
+      return 1;
+    }
+    function saveAudioSpeed(rate) {
+      try { window.localStorage.setItem("openboxy-audio-speed", String(rate)); } catch {}
+    }
+
+    let desiredPreviewRate = getSavedAudioSpeed();
+    let previewAutoplayBlocked = false;
+    let previewWantsAutoplay = false;
+    function setPreviewSpeedUi(rate, persist = true) {
+      desiredPreviewRate = rate;
+      previewTtsAudio.playbackRate = rate;
+      if (persist) saveAudioSpeed(rate);
+      previewTtsSpeeds.querySelectorAll(".audio-btn").forEach((b) => {
+        b.classList.toggle("active", Number(b.dataset.rate) === rate);
+      });
+    }
     for (const rate of [1, 1.25, 1.5, 2]) {
       const sb = document.createElement("button");
       sb.type = "button";
-      sb.className = "audio-btn" + (rate === 1 ? " active" : "");
+      sb.dataset.rate = String(rate);
+      sb.className = "audio-btn" + (rate === desiredPreviewRate ? " active" : "");
       sb.textContent = rate + "x";
-      sb.onclick = () => {
-        previewTtsAudio.playbackRate = rate;
-        previewTtsSpeeds.querySelectorAll(".audio-btn").forEach((b) => b.classList.remove("active"));
-        sb.classList.add("active");
-      };
+      sb.onclick = () => setPreviewSpeedUi(rate, true);
       previewTtsSpeeds.appendChild(sb);
     }
+    function unlockPreviewAutoplay() {
+      if (!previewWantsAutoplay || !previewTtsAudio.paused) return;
+      previewTtsAudio.playbackRate = desiredPreviewRate;
+      previewTtsAudio.play().then(() => {
+        previewAutoplayBlocked = false;
+        previewWantsAutoplay = false;
+        previewTtsStatus.textContent = "";
+      }).catch(() => {});
+    }
+    document.addEventListener("pointerdown", unlockPreviewAutoplay, { passive: true });
+    document.addEventListener("keydown", unlockPreviewAutoplay);
 
     function startPreviewTts() {
       if (!selectedFile) return;
       const v = previewTtsVoice.value || "auto";
+      previewAutoplayBlocked = false;
+      previewWantsAutoplay = true;
       previewTtsStatus.textContent = "Generating audio…";
+      previewTtsAudio.autoplay = true;
+      previewTtsAudio.preload = "auto";
       previewTtsAudio.src =
         "/api/files/tts?path=" + encodeURIComponent(selectedFile) + "&voice=" + encodeURIComponent(v);
-      previewTtsAudio.play().catch(() => {});
+      previewTtsAudio.playbackRate = desiredPreviewRate;
+      previewTtsAudio.load();
+      previewTtsAudio.play().then(() => {
+        previewWantsAutoplay = false;
+        previewAutoplayBlocked = false;
+      }).catch(() => {
+        previewAutoplayBlocked = true;
+      });
     }
 
-    previewTtsAudio.addEventListener("canplay", () => {
+    previewTtsAudio.addEventListener("loadedmetadata", () => {
+      previewTtsAudio.playbackRate = desiredPreviewRate;
+    });
+    previewTtsAudio.addEventListener("play", () => {
+      previewTtsAudio.playbackRate = desiredPreviewRate;
+      previewAutoplayBlocked = false;
+      previewWantsAutoplay = false;
       previewTtsStatus.textContent = "";
+    });
+    previewTtsAudio.addEventListener("canplay", () => {
+      previewTtsAudio.playbackRate = desiredPreviewRate;
+      if (previewWantsAutoplay && previewTtsAudio.paused) {
+        previewTtsAudio.play().then(() => {
+          previewWantsAutoplay = false;
+          previewAutoplayBlocked = false;
+          previewTtsStatus.textContent = "";
+        }).catch(() => {
+          previewAutoplayBlocked = true;
+          previewTtsStatus.textContent = "Tap anywhere to play ▶";
+        });
+      } else {
+        previewTtsStatus.textContent = previewAutoplayBlocked && previewTtsAudio.paused ? "Tap anywhere to play ▶" : "";
+      }
     });
     previewTtsAudio.addEventListener("error", () => {
       previewTtsStatus.textContent = "TTS failed";
@@ -1900,8 +2068,22 @@ codex mcp login ${escapeHtml(mcpName)}</pre>
       } catch {}
     }
 
-    function setTab(tab) {
+    const TAB_PATHS = {
+      browser: "/view",
+      terminal: "/view/terminal",
+      files: "/view/files",
+    };
+
+    function setTab(tab, updateHistory = true) {
       activeTab = tab;
+      if (updateHistory) {
+        const nextPath = TAB_PATHS[tab] || "/view";
+        if (location.pathname !== nextPath) {
+          try {
+            history.pushState({ tab }, "", nextPath);
+          } catch {}
+        }
+      }
       tabBrowser.className = tab === "browser" ? "tab active" : "tab";
       tabTerminal.className = tab === "terminal" ? "tab active" : "tab";
       tabFiles.className = tab === "files" ? "tab active" : "tab";
@@ -1930,6 +2112,13 @@ codex mcp login ${escapeHtml(mcpName)}</pre>
     tabBrowser.addEventListener("click", () => setTab("browser"));
     tabTerminal.addEventListener("click", () => setTab("terminal"));
     tabFiles.addEventListener("click", () => setTab("files"));
+
+    window.addEventListener("popstate", () => {
+      const p = location.pathname;
+      if (p === "/view/terminal") setTab("terminal", false);
+      else if (p === "/view/files") setTab("files", false);
+      else setTab("browser", false);
+    });
 
     async function sendAction(path, payload) {
       const res = await fetch(path, {
@@ -2687,7 +2876,49 @@ codex mcp login ${escapeHtml(mcpName)}</pre>
         statusEl.textContent = "Reload failed: " + (err.message || err);
       }
     });
-    setTab(${JSON.stringify(initialTab)});
+    setTab(${JSON.stringify(initialTab)}, false);
+    if (activeTab === "files") {
+      const qs = new URLSearchParams(location.search);
+      const deepFile = (qs.get("file") || "").trim().replace(/^\\/+/, "");
+      if (deepFile) {
+        const parts = deepFile.split("/");
+        const dir = parts.length > 1 ? parts.slice(0, -1).join("/") : ".";
+        void loadFiles(dir).then(async () => {
+          await previewFile(deepFile);
+          if (window.innerWidth <= 820) {
+            filesWrap.classList.add("mobile-preview-max");
+            filesListToggleBtn.textContent = "Files ▾";
+          }
+          const audioParam = qs.get("audio");
+          if (
+            audioParam !== null &&
+            audioParam !== "0" &&
+            audioParam.toLowerCase() !== "false" &&
+            previewListenBtn.style.display !== "none"
+          ) {
+            const voiceParam = qs.get("voice");
+            if (voiceParam && Array.from(previewTtsVoice.options).some((o) => o.value === voiceParam)) {
+              previewTtsVoice.value = voiceParam;
+            }
+            if (/^\\d+(?:\\.\\d+)?x$/i.test(audioParam.trim())) {
+              const parsedRate = parseFloat(audioParam.replace(/x$/i, ""));
+              if (Number.isFinite(parsedRate) && parsedRate >= 0.5 && parsedRate <= 3) {
+                setPreviewSpeedUi(parsedRate, false);
+              }
+            }
+            previewTtsBar.style.display = "flex";
+            startPreviewTts();
+          }
+        });
+      }
+    }
+    window.addEventListener("pagehide", () => {
+      if (controlling && !handoffBanner.classList.contains("open") && navigator.sendBeacon) {
+        try {
+          navigator.sendBeacon("/view/control/release", "{}");
+        } catch {}
+      }
+    });
     syncControl().then(() => { if (activeTab === "browser") refresh(); });
     setInterval(() => {
       syncControl();
@@ -2754,10 +2985,31 @@ function textResult(data: unknown) {
   };
 }
 
-function buildMcpServer(userId: string): McpServer {
+function buildMcpServer(userId: string, origin?: string): McpServer {
+  const mcpName = process.env.OPENBOXY_MCP_NAME?.trim() || "boxy";
+  const iconBase = origin ? origin.replace(/\/+$/, "") : "";
   const server = new McpServer({
-    name: process.env.OPENBOXY_MCP_NAME?.trim() || "boxy",
+    name: mcpName,
+    title: mcpName === "boxy" ? "OpenBoxy" : mcpName,
     version: "2.0.0",
+    description: "Cloud browser, persistent workspace shell, terminal, and file manager.",
+    ...(iconBase
+      ? {
+          websiteUrl: iconBase,
+          icons: [
+            {
+              src: `${iconBase}/icon.png`,
+              mimeType: "image/png",
+              sizes: ["256x256"],
+            },
+            {
+              src: `${iconBase}/favicon.svg`,
+              mimeType: "image/svg+xml",
+              sizes: ["any"],
+            },
+          ],
+        }
+      : {}),
   });
 
   server.registerTool(
@@ -3010,6 +3262,238 @@ function buildMcpServer(userId: string): McpServer {
   );
 
   server.registerTool(
+    "browser_tabs",
+    {
+      description:
+        "Manage open tabs in the persistent browser: list open tabs, open a new tab (optionally navigating to a URL), switch to a tab by index, or close a tab by index.",
+      inputSchema: {
+        action: z
+          .enum(["list", "new", "switch", "close"])
+          .optional()
+          .describe("Tab action: 'list' (default), 'new', 'switch', or 'close'"),
+        url: z
+          .string()
+          .optional()
+          .describe("URL to open when action is 'new' (optional; defaults to Home)"),
+        index: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("0-based tab index required when action is 'switch' or 'close'"),
+      },
+    },
+    async ({ action, url, index }) => {
+      const act = action || "list";
+      if (act === "list") {
+        return textResult(await sandbox.listTabs(userId));
+      }
+      const ctrl = await sandbox.getControl(userId);
+      if (ctrl.holder === "human") {
+        throw new Error("Human currently has browser control. Ask the user to click Release Control in /view first.");
+      }
+      if (act === "new") {
+        return textResult(await sandbox.newTab(userId, url));
+      }
+      if (typeof index !== "number") {
+        throw new Error(`'index' is required when action is '${act}'`);
+      }
+      if (act === "switch") {
+        return textResult(await sandbox.selectTab(userId, index));
+      }
+      return textResult(await sandbox.closeTab(userId, index));
+    },
+  );
+
+  server.registerTool(
+    "browser_network_log",
+    {
+      description:
+        "Inspect recent HTTP requests and responses captured from the browser (last 200 entries). Use only_api=true to list XHR/fetch/JSON calls concisely, then pass entry_id to inspect a single entry's full request postData and responseBody. Set clear=true to reset the buffer.",
+      inputSchema: {
+        only_api: z
+          .boolean()
+          .optional()
+          .describe("If true, filter to XHR, fetch, and JSON/GraphQL responses"),
+        filter_url: z
+          .string()
+          .optional()
+          .describe("Case-insensitive substring filter on request URL"),
+        resource_types: z
+          .array(z.string())
+          .optional()
+          .describe("Filter by Playwright resource types (e.g. ['xhr', 'fetch', 'document', 'script'])"),
+        method: z
+          .string()
+          .optional()
+          .describe("Filter by HTTP method (e.g. 'GET', 'POST')"),
+        status_min: z
+          .number()
+          .int()
+          .optional()
+          .describe("Minimum HTTP status code (e.g. 400 for errors)"),
+        status_max: z
+          .number()
+          .int()
+          .optional()
+          .describe("Maximum HTTP status code"),
+        include_bodies: z
+          .boolean()
+          .optional()
+          .describe("Include request postData and responseBody in list results (default false to save tokens)"),
+        entry_id: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe("Fetch full details (including postData and responseBody) for a single captured entry ID"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Maximum number of entries to return, newest first (default 30, max 100)"),
+        clear: z
+          .boolean()
+          .optional()
+          .describe("If true, clear the captured network log buffer"),
+      },
+    },
+    async ({
+      only_api,
+      filter_url,
+      resource_types,
+      method,
+      status_min,
+      status_max,
+      include_bodies,
+      entry_id,
+      limit,
+      clear,
+    }) => {
+      return textResult(
+        await sandbox.getNetworkLog(userId, {
+          onlyApi: only_api,
+          filterUrl: filter_url,
+          resourceTypes: resource_types,
+          method,
+          statusMin: status_min,
+          statusMax: status_max,
+          includeBodies: include_bodies,
+          entryId: entry_id,
+          limit,
+          clear,
+        }),
+      );
+    },
+  );
+
+  server.registerTool(
+    "browser_pdf",
+    {
+      description:
+        "Print/export the current browser page to a PDF file in the user's workspace (default: pdfs/<title>-<timestamp>.pdf), optionally creating a public share link.",
+      inputSchema: {
+        path: z
+          .string()
+          .optional()
+          .describe("Optional workspace path to save the PDF (defaults to pdfs/<title>-<timestamp>.pdf)"),
+        format: z
+          .enum(["Letter", "A4", "Legal"])
+          .optional()
+          .describe("Paper size format: 'Letter' (default), 'A4', or 'Legal'"),
+        landscape: z
+          .boolean()
+          .optional()
+          .describe("Print in landscape orientation (default false)"),
+        print_background: z
+          .boolean()
+          .optional()
+          .describe("Include CSS backgrounds and colors (default true)"),
+        scale: z
+          .number()
+          .min(0.1)
+          .max(2)
+          .optional()
+          .describe("Page scale factor from 0.1 to 2 (default 1)"),
+        create_share: z
+          .boolean()
+          .optional()
+          .describe("If true, also create a 1-week public share link (/s/<id>) for the generated PDF"),
+      },
+    },
+    async ({ path: savePath, format, landscape, print_background, scale, create_share }) => {
+      const base = PUBLIC_URL || iconBase || `http://127.0.0.1:${PORT}`;
+      const res = await sandbox.savePdf(userId, {
+        savePath,
+        format,
+        landscape,
+        printBackground: print_background,
+        scale,
+      });
+      let shareUrl: string | undefined;
+      if (create_share) {
+        const info = shares.createOrUpdate({
+          userId,
+          path: res.path,
+          expiresIn: "1w",
+          password: null,
+          publicOrigin: base,
+        });
+        shareUrl = info.url;
+      }
+      return textResult({
+        ...res,
+        filesUrl: `${base}/view/files`,
+        ...(shareUrl ? { shareUrl } : {}),
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_human_control",
+    {
+      description:
+        "Hand browser control over to the human user (for login, 2FA, checkout confirmation, etc.) and show an action banner in the OpenBoxy /view UI with a 'Done — Resume Agent' button. By default (wait_seconds=0), returns immediately with the clickable /view URL so you can tell the user to complete the step; optionally set wait_seconds (e.g. 60-180) in CLI/IDE agents to wait until the user clicks Done.",
+      inputSchema: {
+        reason: z
+          .string()
+          .min(1)
+          .describe("Clear explanation of what the human needs to do (e.g. 'Sign in to GitHub and complete 2FA')"),
+        url: z
+          .string()
+          .optional()
+          .describe("Optional URL to open in the browser before handing control to the human"),
+        wait_seconds: z
+          .number()
+          .int()
+          .min(0)
+          .max(300)
+          .optional()
+          .describe("Optional seconds to wait for the user to click 'Done — Resume Agent' (default 0 = return immediately with link; max 300)"),
+      },
+    },
+    async ({ reason, url, wait_seconds }) => {
+      const base = PUBLIC_URL || iconBase || `http://127.0.0.1:${PORT}`;
+      const viewUrl = `${base}/view`;
+      const res = await sandbox.requestHumanControl(userId, {
+        reason,
+        url,
+        waitSeconds: wait_seconds,
+      });
+      return textResult({
+        ...res,
+        viewUrl,
+        note:
+          res.status === "resumed"
+            ? "Human completed the step and released control back to the agent. You can continue inspecting or automating the browser."
+            : `Human control is now active. Tell the user to open ${viewUrl}, complete the step ("${res.reason}"), and click "Done — Resume Agent".`,
+      });
+    },
+  );
+
+  server.registerTool(
     "share",
     {
       description:
@@ -3049,6 +3533,351 @@ function buildMcpServer(userId: string): McpServer {
         expiresAt: info.expiresAt ? new Date(info.expiresAt).toISOString() : null,
         hasPassword: info.hasPassword,
         filesUrl: `${base}/view/files`,
+      });
+    },
+  );
+
+  server.registerTool(
+    "publish_app",
+    {
+      description:
+        "Publish an interactive HTML app or game (with full JavaScript, Canvas, WebGL, Audio, and CSS support) to a live public URL (https://<boxy>/app/<id>). Pass raw self-contained HTML in 'html' (Boxy saves it to apps/<slug>.html automatically) and/or an existing workspace HTML file in 'path'. Republishing the same path updates the app in-place at the same URL.",
+      inputSchema: {
+        title: z
+          .string()
+          .optional()
+          .describe("Display title for the published app/game (e.g. 'Snake Game')"),
+        html: z
+          .string()
+          .optional()
+          .describe("Complete self-contained HTML document to save and publish"),
+        path: z
+          .string()
+          .optional()
+          .describe("Optional workspace path (e.g. 'apps/snake.html'). If 'html' is provided without 'path', defaults to apps/<slug>.html."),
+        password: z
+          .string()
+          .optional()
+          .describe("Optional password required to open the published app"),
+        expires_in: z
+          .enum(["1d", "1w", "1m", "forever"])
+          .optional()
+          .describe("Expiration length: '1d', '1w', '1m', or 'forever' (default 'forever')"),
+      },
+    },
+    async ({ title, html, path: customPath, password, expires_in }) => {
+      const base = PUBLIC_URL || iconBase || `http://127.0.0.1:${PORT}`;
+      const cleanTitle = (title || "").trim();
+      let relPath = (customPath || "").trim().replace(/^\/+/, "");
+      if (html !== undefined) {
+        if (!html.trim()) throw new Error("'html' cannot be empty");
+        if (!relPath) {
+          const slug =
+            (cleanTitle || "app")
+              .toLowerCase()
+              .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+              .replace(/^-+|-+$/g, "")
+              .slice(0, 60) || "app";
+          relPath = `apps/${slug}.html`;
+        } else if (!/\.(html|htm)$/i.test(relPath)) {
+          relPath += ".html";
+        }
+        const written = await sandbox.writeFile(userId, relPath, html, false);
+        relPath = written.path;
+      } else if (!relPath) {
+        throw new Error("Provide either 'html' content or an existing workspace 'path' to publish");
+      }
+      const fileInfo = await sandbox.resolveFileForRead(userId, relPath);
+      const displayTitle =
+        cleanTitle ||
+        (fileInfo.path.split("/").pop() || "App").replace(/\.(html|htm)$/i, "");
+      const info = shares.createOrUpdate({
+        userId,
+        path: fileInfo.path,
+        mode: "app",
+        title: displayTitle,
+        expiresIn: expires_in || "forever",
+        password: password || null,
+        publicOrigin: base,
+      });
+      return textResult({
+        appUrl: info.url,
+        id: info.id,
+        title: displayTitle,
+        path: info.path,
+        expiresAt: info.expiresAt ? new Date(info.expiresAt).toISOString() : null,
+        hasPassword: info.hasPassword,
+        filesUrl: `${base}/view/files`,
+        note: `Published interactive app at ${info.url}. You can update it in-place anytime by calling publish_app with path "${info.path}".`,
+      });
+    },
+  );
+
+  server.registerTool(
+    "article_to_audio",
+    {
+      description:
+        "Download a web article URL (cleaned with Reader View) or use an existing workspace article/text file, pre-warm its dynamic TTS audio, and return a shareable article link with ?audio=1x (e.g. https://<boxy>/s/<id>?audio=1x) that opens the article and starts the audio player automatically without storing extra MP3 files in the workspace.",
+      inputSchema: {
+        target: z
+          .string()
+          .min(1)
+          .describe("Article http(s):// URL to download, OR an existing workspace file path (e.g. 'articles/post.html' or 'notes.md')"),
+        speed: z
+          .enum(["1x", "1.25x", "1.5x", "2x"])
+          .optional()
+          .describe("Initial playback speed for the audio player (default '1x')"),
+        voice: z
+          .string()
+          .optional()
+          .describe("TTS voice ID (default 'auto' detects English/Chinese; options: 'en-US-EmmaMultilingualNeural', 'en-US-AndrewMultilingualNeural', 'en-US-AriaNeural', 'en-GB-SoniaNeural', 'zh-CN-XiaoxiaoNeural', 'zh-CN-YunxiNeural')"),
+        expires_in: z
+          .enum(["1d", "1w", "1m", "forever"])
+          .optional()
+          .describe("Share link expiration: '1d', '1w' (default), '1m', or 'forever'"),
+        password: z
+          .string()
+          .optional()
+          .describe("Optional password required to open the shared article link"),
+      },
+    },
+    async ({ target, speed, voice, expires_in, password }) => {
+      const base = PUBLIC_URL || iconBase || `http://127.0.0.1:${PORT}`;
+      const rawTarget = target.trim();
+      let articleRelPath = rawTarget;
+      let articleTitle = "";
+
+      if (/^https?:\/\//i.test(rawTarget)) {
+        const extracted = await sandbox.withPage(userId, async (page) => {
+          await page.goto(rawTarget, { waitUntil: "domcontentloaded", timeout: 45_000 });
+          await page.waitForLoadState("networkidle", { timeout: 6_000 }).catch(() => {});
+          return extractReadableArticleHtml(page);
+        });
+        articleTitle = extracted.title;
+        const slug =
+          extracted.title
+            .toLowerCase()
+            .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 72) || "article";
+        const saved = await sandbox.writeFile(userId, `articles/${slug}.html`, extracted.singleHtml, false);
+        articleRelPath = saved.path;
+      }
+
+      const fileInfo = await sandbox.resolveFileForRead(userId, articleRelPath);
+      const filename = fileInfo.path.split("/").pop() || "article.html";
+      const ext = (filename.split(".").pop() || "html").toLowerCase();
+      if (!articleTitle) articleTitle = filename.replace(/\.[^.]+$/, "") || "article";
+
+      const shareInfo = shares.createOrUpdate({
+        userId,
+        path: fileInfo.path,
+        mode: "file",
+        title: articleTitle,
+        expiresIn: expires_in || "1w",
+        password: password || null,
+        publicOrigin: base,
+      });
+
+      const chosenVoice = (voice || "auto").trim() || "auto";
+      const qs = new URLSearchParams({ audio: speed || "1" });
+      if (chosenVoice !== "auto") qs.set("voice", chosenVoice);
+      const audioUrl = `${shareInfo.url}?${qs.toString()}`;
+
+      // Pre-warm dynamic TTS cache in the background so playback starts immediately when opened
+      const dataDir = path.resolve(process.env.DATA_DIR || "/data");
+      void getOrSynthesizeArticleAudio({
+        dataDir,
+        userId,
+        fullPath: fileInfo.fullPath,
+        ext,
+        voice: chosenVoice,
+      }).catch(() => {});
+
+      return textResult({
+        audioUrl,
+        articleUrl: shareInfo.url,
+        title: articleTitle,
+        articlePath: fileInfo.path,
+        speed: speed || "remembered",
+        voice: chosenVoice,
+        expiresAt: shareInfo.expiresAt ? new Date(shareInfo.expiresAt).toISOString() : null,
+        hasPassword: shareInfo.hasPassword,
+        filesUrl: `${base}/view/files`,
+        note: `Send ${audioUrl} to the user. Opening it displays the clean article and starts the dynamic TTS audio player automatically using their saved speed preference.`,
+      });
+    },
+  );
+
+  server.registerTool(
+    "create_audio_briefing",
+    {
+      description:
+        "Save a clean spoken briefing (for unread emails from Gmail/Outlook/Proton/etc., web chat messages from Slack/Discord/WhatsApp/Telegram, or news digests) as an HTML document in briefings/ and return an audio link with ?audio=1x that opens the briefing and auto-starts dynamic TTS playback without storing MP3 files. Private by default (requires Boxy login via /view/files?file=...&audio=1x) so personal emails/messages are never exposed publicly unless public_share=true.",
+      inputSchema: {
+        title: z
+          .string()
+          .min(1)
+          .describe("Briefing title (e.g. 'Unread Emails Briefing' or 'Slack & Messages Summary')"),
+        content: z
+          .string()
+          .min(1)
+          .describe("Clean, natural briefing text or Markdown prepared for reading and spoken TTS (skip raw HTML/signatures/unsubscribe footers)"),
+        speed: z
+          .enum(["1x", "1.25x", "1.5x", "2x"])
+          .optional()
+          .describe("Initial playback speed (default '1x')"),
+        voice: z
+          .string()
+          .optional()
+          .describe("TTS voice ID (default 'auto' detects English/Chinese)"),
+        public_share: z
+          .boolean()
+          .optional()
+          .describe("If false (default, recommended for private emails/messages), returns an authenticated /view/files?file=...&audio=1x link. If true, creates a public /s/<id>?audio=1x share link."),
+        expires_in: z
+          .enum(["1d", "1w", "1m", "forever"])
+          .optional()
+          .describe("Expiration when public_share=true (default '1d')"),
+        password: z
+          .string()
+          .optional()
+          .describe("Optional password when public_share=true"),
+      },
+    },
+    async ({ title, content, speed, voice, public_share, expires_in, password }) => {
+      const base = PUBLIC_URL || iconBase || `http://127.0.0.1:${PORT}`;
+      const cleanTitle = title.trim();
+      const chosenVoice = (voice || "auto").trim() || "auto";
+      const chosenSpeed = speed || "1x";
+      const nowIso = new Date().toISOString();
+      const stamp = nowIso.slice(0, 16).replace(/[:T]/g, "-");
+      const slug =
+        cleanTitle
+          .toLowerCase()
+          .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 56) || "briefing";
+
+      const inlineFmt = (s: string) =>
+        escapeHtml(s)
+          .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+          .replace(/`([^`]+)`/g, "<code>$1</code>");
+      const lines = content.replace(/\r\n/g, "\n").split("\n");
+      const blocks: string[] = [];
+      let inList = false;
+      const closeList = () => {
+        if (inList) {
+          blocks.push("</ul>");
+          inList = false;
+        }
+      };
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) {
+          closeList();
+          continue;
+        }
+        if (/^###\s+/.test(line)) {
+          closeList();
+          blocks.push(`<h3>${inlineFmt(line.replace(/^###\s+/, ""))}</h3>`);
+        } else if (/^##\s+/.test(line)) {
+          closeList();
+          blocks.push(`<h2>${inlineFmt(line.replace(/^##\s+/, ""))}</h2>`);
+        } else if (/^#\s+/.test(line)) {
+          closeList();
+          blocks.push(`<h2>${inlineFmt(line.replace(/^#\s+/, ""))}</h2>`);
+        } else if (/^[-*•]\s+/.test(line)) {
+          if (!inList) {
+            blocks.push("<ul>");
+            inList = true;
+          }
+          blocks.push(`<li>${inlineFmt(line.replace(/^[-*•]\s+/, ""))}</li>`);
+        } else {
+          closeList();
+          blocks.push(`<p>${inlineFmt(line)}</p>`);
+        }
+      }
+      closeList();
+
+      const briefingHtml = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(cleanTitle)}</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 720px; margin: 28px auto; padding: 0 18px 60px; line-height: 1.7; font-size: 17px; color: #111827; background: #fff; }
+    @media (prefers-color-scheme: dark) { body { color: #e5e7eb; background: #111827; } .obx-meta { border-color: #374151; color: #9ca3af; } }
+    h1 { font-size: 1.75rem; line-height: 1.25; margin: 0 0 8px; }
+    h2 { font-size: 1.2rem; margin: 24px 0 8px; }
+    h3 { font-size: 1.05rem; margin: 18px 0 6px; }
+    .obx-meta { font-size: 0.85rem; color: #6b7280; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid #e5e7eb; }
+    ul { padding-left: 22px; }
+    li { margin-bottom: 6px; }
+    code { font-size: 0.9em; padding: 1px 5px; border-radius: 5px; background: rgba(127,127,127,0.15); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>${escapeHtml(cleanTitle)}</h1>
+    <div class="obx-meta">Generated ${escapeHtml(nowIso.slice(0, 16).replace("T", " "))} UTC</div>
+  </header>
+  <main>${blocks.join("\n")}</main>
+</body>
+</html>`;
+
+      const saved = await sandbox.writeFile(userId, `briefings/${slug}-${stamp}.html`, briefingHtml, false);
+      const fileInfo = await sandbox.resolveFileForRead(userId, saved.path);
+
+      // Pre-warm dynamic TTS cache in the background
+      const dataDir = path.resolve(process.env.DATA_DIR || "/data");
+      void getOrSynthesizeArticleAudio({
+        dataDir,
+        userId,
+        fullPath: fileInfo.fullPath,
+        ext: "html",
+        voice: chosenVoice,
+      }).catch(() => {});
+
+      if (public_share) {
+        const shareInfo = shares.createOrUpdate({
+          userId,
+          path: fileInfo.path,
+          mode: "file",
+          title: cleanTitle,
+          expiresIn: expires_in || "1d",
+          password: password || null,
+          publicOrigin: base,
+        });
+        const qs = new URLSearchParams({ audio: speed || "1" });
+        if (chosenVoice !== "auto") qs.set("voice", chosenVoice);
+        const audioUrl = `${shareInfo.url}?${qs.toString()}`;
+        return textResult({
+          audioUrl,
+          title: cleanTitle,
+          path: fileInfo.path,
+          private: false,
+          speed: speed || "remembered",
+          voice: chosenVoice,
+          expiresAt: shareInfo.expiresAt ? new Date(shareInfo.expiresAt).toISOString() : null,
+          hasPassword: shareInfo.hasPassword,
+          note: `Send ${audioUrl} to the user to read and listen immediately.`,
+        });
+      }
+
+      const qs = new URLSearchParams({ file: fileInfo.path, audio: speed || "1" });
+      if (chosenVoice !== "auto") qs.set("voice", chosenVoice);
+      const audioUrl = `${base}/view/files?${qs.toString()}`;
+      return textResult({
+        audioUrl,
+        title: cleanTitle,
+        path: fileInfo.path,
+        private: true,
+        speed: speed || "remembered",
+        voice: chosenVoice,
+        note: `Send ${audioUrl} to the user. It is private (requires their OpenBoxy login), opens the briefing directly, and starts the dynamic TTS audio player automatically using their saved speed preference.`,
       });
     },
   );
@@ -3240,11 +4069,38 @@ const server = Bun.serve<TerminalSocketData>({
       });
     }
 
-    if (req.method === "GET" && (url.pathname === "/favicon.svg" || url.pathname === "/favicon.ico")) {
-      return new Response(OPENBOXY_FAVICON_SVG, {
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/favicon.svg") {
+      return new Response(req.method === "HEAD" ? null : OPENBOXY_FAVICON_SVG, {
         headers: {
           "Content-Type": "image/svg+xml; charset=utf-8",
+          "Content-Length": String(Buffer.byteLength(OPENBOXY_FAVICON_SVG)),
           "Cache-Control": "public, max-age=86400",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    }
+
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/favicon.ico") {
+      return new Response(req.method === "HEAD" ? null : OPENBOXY_FAVICON_ICO, {
+        headers: {
+          "Content-Type": "image/x-icon",
+          "Content-Length": String(OPENBOXY_FAVICON_ICO.byteLength),
+          "Cache-Control": "public, max-age=86400",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    }
+
+    if (
+      (req.method === "GET" || req.method === "HEAD") &&
+      (url.pathname === "/icon.png" || url.pathname === "/favicon.png" || url.pathname === "/apple-touch-icon.png")
+    ) {
+      return new Response(req.method === "HEAD" ? null : OPENBOXY_ICON_PNG, {
+        headers: {
+          "Content-Type": "image/png",
+          "Content-Length": String(OPENBOXY_ICON_PNG.byteLength),
+          "Cache-Control": "public, max-age=86400",
+          "Access-Control-Allow-Origin": "*",
         },
       });
     }
@@ -3285,6 +4141,73 @@ const server = Bun.serve<TerminalSocketData>({
           "Set-Cookie": `openboxy_ui=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${isSecure ? "; Secure" : ""}`,
         },
       });
+    }
+
+    if (url.pathname.startsWith("/app/")) {
+      const rest = url.pathname.slice(5);
+      const slashIdx = rest.indexOf("/");
+      const shareId = decodeURIComponent(slashIdx === -1 ? rest : rest.slice(0, slashIdx));
+      const subPath = slashIdx === -1 ? "" : rest.slice(slashIdx);
+      const rec = shareId ? shares.getShare(shareId) : null;
+      if (!rec || rec.mode !== "app") {
+        return renderShareNotFoundPage(OPENBOXY_THEME_HEAD);
+      }
+      let fileInfo: { path: string; fullPath: string; size: number };
+      try {
+        fileInfo = await sandbox.resolveFileForRead(rec.userId, rec.path);
+      } catch {
+        return renderShareNotFoundPage(OPENBOXY_THEME_HEAD);
+      }
+      const filename = fileInfo.path.split("/").pop() || "app.html";
+      const appTitle = rec.title || filename.replace(/\.(html|htm)$/i, "");
+      const cookieName = `obx_sh_${rec.id}`;
+      const unlocked = shares.verifyUnlockCookie(rec, readCookie(req, cookieName));
+
+      if (req.method === "POST" && subPath === "") {
+        const form = await req.formData().catch(() => null);
+        const pw = String(form?.get("password") || "");
+        if (!shares.verifyPassword(rec, pw)) {
+          return renderSharePasswordPage(OPENBOXY_THEME_HEAD, rec.id, appTitle, "Incorrect password.", "/app");
+        }
+        const isSecure = publicOrigin(req).startsWith("https://");
+        const sig = encodeURIComponent(shares.signUnlockCookie(rec));
+        return new Response(null, {
+          status: 303,
+          headers: {
+            Location: `/app/${encodeURIComponent(rec.id)}`,
+            "Set-Cookie": `${cookieName}=${sig}; Path=/app/${encodeURIComponent(rec.id)}; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 60 * 60}${isSecure ? "; Secure" : ""}`,
+          },
+        });
+      }
+
+      if (!unlocked) {
+        if (subPath === "/download") return new Response("Unauthorized", { status: 401 });
+        return renderSharePasswordPage(OPENBOXY_THEME_HEAD, rec.id, appTitle, undefined, "/app");
+      }
+
+      if (req.method === "GET" && subPath === "") {
+        shares.recordView(rec.id);
+        const htmlContent = readFileSync(fileInfo.fullPath, "utf8");
+        return renderAppPlayerPage({
+          themeHead: OPENBOXY_THEME_HEAD,
+          rec,
+          title: appTitle,
+          htmlContent,
+        });
+      }
+
+      if (req.method === "GET" && subPath === "/download") {
+        const safeAscii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+        return new Response(Bun.file(fileInfo.fullPath), {
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Disposition": `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+            "X-Content-Type-Options": "nosniff",
+          },
+        });
+      }
+
+      return renderShareNotFoundPage(OPENBOXY_THEME_HEAD);
     }
 
     if (url.pathname.startsWith("/s/")) {
@@ -3452,6 +4375,8 @@ const server = Bun.serve<TerminalSocketData>({
         grant_types_supported: ["authorization_code"],
         code_challenge_methods_supported: ["S256"],
         token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
+        logo_uri: `${origin}/icon.png`,
+        service_documentation: origin,
       });
     }
 
@@ -3623,7 +4548,7 @@ const server = Bun.serve<TerminalSocketData>({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
-      const mcp = buildMcpServer(userId);
+      const mcp = buildMcpServer(userId, publicOrigin(req));
       transport.onclose = () => {
         void mcp.close().catch(() => {});
       };

@@ -8,6 +8,25 @@ Each API token maps to an isolated user sandbox (`/data/users/<userId>/profile`,
 
 ---
 
+## What You Can Ask Your AI (Example Prompts)
+
+Once OpenBoxy (`boxy`) is connected to **ChatGPT, Gemini, Claude, OpenCode, or Cursor**, you can just talk to it naturally:
+
+- **Browse & Screenshot:** *"Use boxy to open `https://news.ycombinator.com`, summarize the top 5 stories, and take a screenshot."* → Navigates in a real Chromium browser (with uBlock Origin Lite + your cookies) and saves a PNG to `screenshots/`.
+- **Download a Clean Article:** *"Have boxy save `https://example.com/long-post` as a clean offline article."* → Extracts Reader View HTML + embedded images (no nav/ads) into `articles/` for reading in `/view/files`.
+- **Listen to an Article Hands-Free:** *"Let boxy send me the audio link for `https://example.com/long-post`."* → Archives the clean article and returns a `?audio=1` link that opens the article and starts dynamic Edge TTS playback at your remembered speed (`1x`–`2x`) with zero MP3 clutter.
+- **Private Audio Briefing for Emails & Messages:** *"Let boxy check my unread emails in Gmail (or Outlook / Slack / Discord) and send me an audio link."* → Reads your already signed-in webmail/chat tab and returns a **private, login-protected link** (`/view/files?file=...&audio=1`) to listen on your phone.
+- **Download Videos or Music:** *"Use boxy to download the audio from `https://youtu.be/...`."* → Downloads video/MP3 into `downloads/` (via the MeTube/yt-dlp plugin or browser downloads), playable right in `/view/files`.
+- **Build & Publish a Playable HTML Game / Mini-App:** *"Build a Snake game in HTML and publish it with boxy."* → Saves to `apps/` and publishes a live, full-screen playable URL (`/app/<id>`) in an isolated sandbox iframe (updates in-place when you ask for changes).
+- **Save a Logged-In Page as PDF:** *"Open my billing page in boxy, export it to PDF, and give me a share link."* → Prints the active page to `pdfs/` (`browser_pdf`) with an optional `/s/<id>` link.
+- **Handle Logins / 2FA Together:** *"Open my dashboard in boxy—if it asks to sign in, hand control to me."* → Triggers `request_human_control` with an **Action Needed** banner and **Done — Resume Agent** button in `/view`.
+- **Multi-Tab Research & API Debugging:** *"Open these 3 pages in separate boxy tabs, and check the JSON API responses in the network log."* → Uses `browser_tabs` and `browser_network_log` to inspect live XHR/fetch payloads without losing your open tabs.
+- **Share Any Workspace File:** *"Share `articles/report.html` with a password that expires in 1 day."* → Creates a password-protected `/s/<id>` link with configurable expiration (`1d`, `1w`, `1m`, `forever`).
+- **Run Shell Commands & Scripts:** *"Use boxy's shell to convert `downloads/data.csv` into a summary chart and save it to `files/`."* → Runs commands in your persistent Linux workspace (`shell`, `read_file`, `write_file`, `edit_file`) or lets you jump into `/view/terminal` with the built-in **Pi** coding agent (`+ Pi`).
+- **Switch VPN Country (Plugin):** *"Switch boxy's VPN to Japan and check how `https://example.com` looks from Tokyo."* → Routes the browser through a configured proxy/VPN plugin (`set_vpn_country`).
+
+---
+
 ## Features
 
 ### 1. Live Persistent Browser (`/view`) with Human Takeover
@@ -27,9 +46,10 @@ Each API token maps to an isolated user sandbox (`/data/users/<userId>/profile`,
 
 ### 4. Streamable HTTP MCP Server (`/mcp`) & Client Setup
 - **Core MCP Tools:**
-  - **Browser:** `browser_navigate`, `browser_snapshot`, `browser_read`, `browser_click`, `browser_type`, `browser_press`, `browser_scroll`, `screenshot`, `browser_view`
-  - **Terminal & Files:** `shell`, `read_file`, `write_file`, `edit_file`, `list_dir`, `share`
-- **OAuth 2.0 PKCE & Bearer Auth:** Supports both zero-header OAuth 2.0 PKCE + Dynamic Client Registration (`/oauth/authorize`) and static `Authorization: Bearer <token>` headers, with a built-in **MCP Setup** modal in `/view` generating ready-to-paste configs for Claude Code, Codex, Gemini CLI, Cursor, OpenCode, VS Code, OpenClaw, Hermes, DeepSeek, and WorkBuddy.
+  - **Browser:** `browser_navigate`, `browser_snapshot`, `browser_read`, `browser_click`, `browser_type`, `browser_press`, `browser_scroll`, `browser_tabs`, `browser_network_log`, `browser_pdf`, `screenshot`, `browser_view`, `request_human_control`
+  - **Publishing & Audio:** `publish_app`, `article_to_audio`, `create_audio_briefing`, `share`
+  - **Terminal & Files:** `shell`, `read_file`, `write_file`, `edit_file`, `list_dir`
+- **OAuth 2.0 PKCE & Bearer Auth:** Supports both zero-header OAuth 2.0 PKCE + Dynamic Client Registration (`/oauth/authorize`) and static `Authorization: Bearer <token>` headers, with a built-in **MCP Setup** modal in `/view` generating ready-to-paste configs for ChatGPT, Claude, Gemini, Claude Code, Codex, Gemini CLI, Cursor, OpenCode, VS Code, OpenClaw, Hermes, DeepSeek, and WorkBuddy.
 
 ### 5. Multi-User Isolation in a Single Container
 - Each token (`OPENBOXY_MCP_TOKEN`, `OPENBOXY_USERS`, or `/data/users.json`) maps to an isolated user sandbox (`/data/users/<userId>/{profile,workspace,home}`) with its own browser profile, cookies, bookmarks, files, and terminal sessions.
@@ -130,8 +150,9 @@ Then run `/mcps` in OpenCode, select `boxy`, and sign in at `/oauth/authorize` u
 
 ## Exposed MCP Tools
 - **Terminal & Files:** `shell`, `read_file`, `write_file`, `edit_file`, `list_dir`
-- **Browser:** `browser_navigate`, `browser_snapshot`, `browser_read`, `browser_click`, `browser_type`, `browser_press`, `browser_scroll`, `screenshot`, `browser_view`
-- **Browser Downloads:** Any file downloaded in the live browser automatically saves to `workspace/downloads/` and appears in `/view/files`.
+- **Browser & Handoff:** `browser_navigate`, `browser_snapshot`, `browser_read`, `browser_click`, `browser_type`, `browser_press`, `browser_scroll`, `browser_tabs`, `browser_network_log`, `browser_pdf`, `screenshot`, `browser_view`, `request_human_control`
+- **Publishing, Audio & Sharing:** `publish_app`, `article_to_audio`, `create_audio_briefing`, `share`
+- **Browser Downloads:** Any file downloaded in the live browser automatically saves to `workspace/downloads/` and appears in `/view/files` (sorted newest-first).
 
 ---
 

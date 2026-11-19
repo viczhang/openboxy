@@ -16,6 +16,35 @@ export type SnapshotElement = {
   href?: string;
 };
 
+export type NetworkLogEntry = {
+  id: number;
+  timestamp: string;
+  method: string;
+  url: string;
+  resourceType: string;
+  status: number | null;
+  statusText: string;
+  contentType: string;
+  postData?: string;
+  responseBody?: string;
+  responseTruncated?: boolean;
+  errorText?: string;
+};
+
+const MAX_NETWORK_LOG = 200;
+const MAX_NETWORK_BODY_CHARS = 16_000;
+const MAX_NETWORK_POST_CHARS = 4_000;
+const HUMAN_CONTROL_IDLE_MS = Math.max(5, Number(process.env.HUMAN_CONTROL_IDLE_SECONDS ?? 30)) * 1000;
+
+export type HumanHandoffRequest = {
+  id: number;
+  reason: string;
+  url?: string;
+  requestedAt: string;
+  status: "waiting" | "resumed";
+  resolvedAt?: string;
+};
+
 type UserSandboxState = {
   userId: string;
   workspaceDir: string;
@@ -25,10 +54,16 @@ type UserSandboxState = {
   page: Page | null;
   snapshotId: number;
   holder: SandboxControlHolder;
+  humanLastActiveAt: number;
   lastUsedAt: number;
   lock: Promise<void>;
   pendingFileChooser: { id: number; chooser: FileChooser; multiple: boolean } | null;
   fileChooserSeq: number;
+  networkLog: NetworkLogEntry[];
+  networkSeq: number;
+  handoff: HumanHandoffRequest | null;
+  handoffSeq: number;
+  handoffWaiters: Array<() => void>;
 };
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "/data");
@@ -74,10 +109,16 @@ export class SandboxManager {
         page: null,
         snapshotId: 0,
         holder: "agent",
+        humanLastActiveAt: 0,
         lastUsedAt: Date.now(),
         lock: Promise.resolve(),
         pendingFileChooser: null,
         fileChooserSeq: 0,
+        networkLog: [],
+        networkSeq: 0,
+        handoff: null,
+        handoffSeq: 0,
+        handoffWaiters: [],
       };
       this.users.set(userId, state);
     }
@@ -161,8 +202,79 @@ export class SandboxManager {
     });
   }
 
+  private pushNetworkEntry(state: UserSandboxState, entry: NetworkLogEntry): void {
+    state.networkLog.push(entry);
+    if (state.networkLog.length > MAX_NETWORK_LOG) {
+      state.networkLog.splice(0, state.networkLog.length - MAX_NETWORK_LOG);
+    }
+  }
+
+  private shouldCaptureNetworkUrl(url: string): boolean {
+    if (!url || url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("chrome-extension:")) {
+      return false;
+    }
+    if (this.isHomeUrl(url)) return false;
+    return true;
+  }
+
   private attachPageListeners(state: UserSandboxState, page: Page): void {
     this.attachDownloadListener(state, page);
+    page.on("response", (res) => {
+      const url = res.url();
+      if (!this.shouldCaptureNetworkUrl(url)) return;
+      const req = res.request();
+      const resourceType = req.resourceType();
+      const contentType = res.headers()["content-type"] || "";
+      const rawPost = req.postData();
+      const entry: NetworkLogEntry = {
+        id: ++state.networkSeq,
+        timestamp: new Date().toISOString(),
+        method: req.method(),
+        url,
+        resourceType,
+        status: res.status(),
+        statusText: res.statusText(),
+        contentType,
+        ...(rawPost ? { postData: rawPost.slice(0, MAX_NETWORK_POST_CHARS) } : {}),
+      };
+      this.pushNetworkEntry(state, entry);
+
+      const isTextLike =
+        resourceType === "xhr" ||
+        resourceType === "fetch" ||
+        /json|text\/|xml|graphql|javascript/i.test(contentType);
+      if (isTextLike && res.status() !== 204 && res.status() !== 304) {
+        void res
+          .text()
+          .then((body) => {
+            if (!body) return;
+            if (body.length > MAX_NETWORK_BODY_CHARS) {
+              entry.responseBody = body.slice(0, MAX_NETWORK_BODY_CHARS);
+              entry.responseTruncated = true;
+            } else {
+              entry.responseBody = body;
+            }
+          })
+          .catch(() => {});
+      }
+    });
+    page.on("requestfailed", (req) => {
+      const url = req.url();
+      if (!this.shouldCaptureNetworkUrl(url)) return;
+      const rawPost = req.postData();
+      this.pushNetworkEntry(state, {
+        id: ++state.networkSeq,
+        timestamp: new Date().toISOString(),
+        method: req.method(),
+        url,
+        resourceType: req.resourceType(),
+        status: null,
+        statusText: "",
+        contentType: "",
+        ...(rawPost ? { postData: rawPost.slice(0, MAX_NETWORK_POST_CHARS) } : {}),
+        errorText: req.failure()?.errorText || "Request failed",
+      });
+    });
     page.on("filechooser", (chooser) => {
       state.fileChooserSeq += 1;
       state.pendingFileChooser = {
@@ -391,7 +503,11 @@ export class SandboxManager {
         };
       }),
     );
-    entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
+    entries.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+      if (a.type === "file" && b.mtimeMs !== a.mtimeMs) return b.mtimeMs - a.mtimeMs;
+      return a.name.localeCompare(b.name);
+    });
     return { path: path.relative(state.workspaceDir, resolved) || ".", entries };
   }
 
@@ -427,15 +543,148 @@ export class SandboxManager {
     return { deleted: path.relative(state.workspaceDir, resolved) };
   }
 
-  async getControl(rawUserId: string): Promise<{ holder: SandboxControlHolder; userId: string }> {
-    const state = await this.ensureUserState(rawUserId);
-    return { holder: state.holder, userId: state.userId };
+  private maybeAutoReleaseHumanControl(state: UserSandboxState): boolean {
+    if (state.holder !== "human") return false;
+    if (state.handoff && state.handoff.status === "waiting") return false;
+    if (state.humanLastActiveAt > 0 && Date.now() - state.humanLastActiveAt >= HUMAN_CONTROL_IDLE_MS) {
+      state.holder = "agent";
+      return true;
+    }
+    return false;
   }
 
-  async setControl(rawUserId: string, holder: SandboxControlHolder): Promise<{ holder: SandboxControlHolder; userId: string }> {
+  async touchHumanActivity(rawUserId: string): Promise<void> {
+    const state = await this.ensureUserState(rawUserId);
+    if (state.holder === "human") {
+      state.humanLastActiveAt = Date.now();
+    }
+  }
+
+  async getControl(rawUserId: string): Promise<{
+    holder: SandboxControlHolder;
+    userId: string;
+    handoff: HumanHandoffRequest | null;
+  }> {
+    const state = await this.ensureUserState(rawUserId);
+    this.maybeAutoReleaseHumanControl(state);
+    const activeHandoff = state.handoff && state.handoff.status === "waiting" ? state.handoff : null;
+    return { holder: state.holder, userId: state.userId, handoff: activeHandoff };
+  }
+
+  async setControl(
+    rawUserId: string,
+    holder: SandboxControlHolder,
+  ): Promise<{
+    holder: SandboxControlHolder;
+    userId: string;
+    handoff: HumanHandoffRequest | null;
+  }> {
     const state = await this.ensureUserState(rawUserId);
     state.holder = holder;
-    return { holder: state.holder, userId: state.userId };
+    if (holder === "human") {
+      state.humanLastActiveAt = Date.now();
+    }
+    if (holder === "agent" && state.handoff && state.handoff.status === "waiting") {
+      state.handoff = {
+        ...state.handoff,
+        status: "resumed",
+        resolvedAt: new Date().toISOString(),
+      };
+      const waiters = state.handoffWaiters.splice(0, state.handoffWaiters.length);
+      for (const resolve of waiters) {
+        try {
+          resolve();
+        } catch {}
+      }
+    }
+    const activeHandoff = state.handoff && state.handoff.status === "waiting" ? state.handoff : null;
+    return { holder: state.holder, userId: state.userId, handoff: activeHandoff };
+  }
+
+  async requestHumanControl(
+    rawUserId: string,
+    opts: { reason: string; url?: string; waitSeconds?: number },
+  ): Promise<{
+    status: "waiting" | "resumed";
+    handoffId: number;
+    reason: string;
+    currentUrl: string;
+    timedOut?: boolean;
+    elapsedMs?: number;
+  }> {
+    const state = await this.ensureUserState(rawUserId);
+    const startedAt = Date.now();
+    const targetUrl = (opts.url || "").trim();
+    if (targetUrl) {
+      await this.navigate(rawUserId, targetUrl, true);
+    } else {
+      await this.withLock(state, async () => {
+        await this.getActivePage(state);
+      });
+    }
+
+    const currentUrl = await this.withLock(state, async () => {
+      const page = await this.getActivePage(state);
+      return this.displayUrl(page.url());
+    });
+
+    state.holder = "human";
+    const handoff: HumanHandoffRequest = {
+      id: ++state.handoffSeq,
+      reason: opts.reason.trim(),
+      ...(targetUrl ? { url: targetUrl } : {}),
+      requestedAt: new Date().toISOString(),
+      status: "waiting",
+    };
+    state.handoff = handoff;
+
+    const waitSeconds = Math.min(300, Math.max(0, Math.floor(opts.waitSeconds ?? 0)));
+    if (waitSeconds <= 0) {
+      return {
+        status: "waiting",
+        handoffId: handoff.id,
+        reason: handoff.reason,
+        currentUrl,
+      };
+    }
+
+    const resumed = await new Promise<boolean>((resolve) => {
+      let done = false;
+      const finish = (val: boolean) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        const idx = state.handoffWaiters.indexOf(onResume);
+        if (idx >= 0) state.handoffWaiters.splice(idx, 1);
+        resolve(val);
+      };
+      const onResume = () => finish(true);
+      const timer = setTimeout(() => finish(false), waitSeconds * 1000);
+      state.handoffWaiters.push(onResume);
+    });
+
+    const latestUrl = await this.withLock(state, async () => {
+      const page = await this.getActivePage(state);
+      return this.displayUrl(page.url());
+    });
+
+    if (resumed) {
+      return {
+        status: "resumed",
+        handoffId: handoff.id,
+        reason: handoff.reason,
+        currentUrl: latestUrl,
+        elapsedMs: Date.now() - startedAt,
+      };
+    }
+    return {
+      status: "waiting",
+      timedOut: true,
+      handoffId: handoff.id,
+      reason: handoff.reason,
+      currentUrl: latestUrl,
+      elapsedMs: Date.now() - startedAt,
+    };
   }
 
   private async extractReadable(page: Page): Promise<{ url: string; title: string; text: string }> {
@@ -448,8 +697,15 @@ export class SandboxManager {
   }
 
   private assertAgentControl(state: UserSandboxState, fromHuman = false): void {
-    if (!fromHuman && state.holder === "human") {
-      throw new Error("Browser is currently under human control (/view). Wait until the user clicks Release Control.");
+    if (fromHuman) {
+      if (state.holder === "human") state.humanLastActiveAt = Date.now();
+      return;
+    }
+    this.maybeAutoReleaseHumanControl(state);
+    if (state.holder === "human") {
+      throw new Error(
+        "Browser is currently under active human control (/view). Wait ~30s after human inactivity or ask the user to click Release Control.",
+      );
     }
   }
 
@@ -798,6 +1054,7 @@ export class SandboxManager {
     button: "left" | "right" | "middle" = "left",
   ): Promise<{ ok: true }> {
     const state = await this.ensureUserState(rawUserId);
+    if (state.holder === "human") state.humanLastActiveAt = Date.now();
     return this.withLock(state, async () => {
       const page = await this.getActivePage(state);
       await page.mouse.click(x, y, { button });
@@ -808,6 +1065,7 @@ export class SandboxManager {
 
   async dragAt(rawUserId: string, fromX: number, fromY: number, toX: number, toY: number): Promise<{ ok: true }> {
     const state = await this.ensureUserState(rawUserId);
+    if (state.holder === "human") state.humanLastActiveAt = Date.now();
     return this.withLock(state, async () => {
       const page = await this.getActivePage(state);
       await page.mouse.move(fromX, fromY);
@@ -906,6 +1164,7 @@ export class SandboxManager {
 
   async typeText(rawUserId: string, text: string): Promise<{ ok: true }> {
     const state = await this.ensureUserState(rawUserId);
+    if (state.holder === "human") state.humanLastActiveAt = Date.now();
     return this.withLock(state, async () => {
       const page = await this.getActivePage(state);
       await page.keyboard.insertText(text);
@@ -939,5 +1198,145 @@ export class SandboxManager {
       title: extracted.title,
       imagesEmbedded: extracted.imagesEmbedded,
     };
+  }
+
+  async getNetworkLog(
+    rawUserId: string,
+    opts?: {
+      filterUrl?: string;
+      resourceTypes?: string[];
+      onlyApi?: boolean;
+      method?: string;
+      statusMin?: number;
+      statusMax?: number;
+      includeBodies?: boolean;
+      entryId?: number;
+      limit?: number;
+      clear?: boolean;
+    },
+  ): Promise<{
+    totalBuffered: number;
+    returned?: number;
+    cleared?: number;
+    entry?: NetworkLogEntry | null;
+    entries?: NetworkLogEntry[];
+  }> {
+    const state = await this.ensureUserState(rawUserId);
+    if (opts?.clear) {
+      const cleared = state.networkLog.length;
+      state.networkLog = [];
+      return { totalBuffered: 0, cleared };
+    }
+    if (typeof opts?.entryId === "number") {
+      const found = state.networkLog.find((e) => e.id === opts.entryId) || null;
+      return { totalBuffered: state.networkLog.length, entry: found };
+    }
+    let items = state.networkLog.slice();
+    if (opts?.onlyApi) {
+      items = items.filter(
+        (e) =>
+          e.resourceType === "xhr" ||
+          e.resourceType === "fetch" ||
+          /json|graphql/i.test(e.contentType),
+      );
+    }
+    if (opts?.resourceTypes && opts.resourceTypes.length > 0) {
+      const allowed = new Set(opts.resourceTypes.map((t) => t.toLowerCase()));
+      items = items.filter((e) => allowed.has(e.resourceType.toLowerCase()));
+    }
+    if (opts?.filterUrl) {
+      const needle = opts.filterUrl.toLowerCase();
+      items = items.filter((e) => e.url.toLowerCase().includes(needle));
+    }
+    if (opts?.method) {
+      const m = opts.method.toUpperCase();
+      items = items.filter((e) => e.method.toUpperCase() === m);
+    }
+    if (typeof opts?.statusMin === "number") {
+      items = items.filter((e) => e.status !== null && e.status >= opts.statusMin!);
+    }
+    if (typeof opts?.statusMax === "number") {
+      items = items.filter((e) => e.status !== null && e.status <= opts.statusMax!);
+    }
+    const limit = Math.min(Math.max(1, opts?.limit ?? 30), 100);
+    const sliced = items.slice(-limit).reverse();
+    const entries = opts?.includeBodies
+      ? sliced
+      : sliced.map(({ postData: _p, responseBody: _b, ...rest }) => ({
+          ...rest,
+          ...(rest.contentType && _b ? { responseBodyChars: _b.length } : {}),
+        }));
+    return {
+      totalBuffered: state.networkLog.length,
+      returned: entries.length,
+      entries,
+    };
+  }
+
+  async savePdf(
+    rawUserId: string,
+    opts?: {
+      savePath?: string;
+      format?: "Letter" | "A4" | "Legal";
+      landscape?: boolean;
+      printBackground?: boolean;
+      scale?: number;
+    },
+  ): Promise<{ path: string; bytes: number; url: string; title: string }> {
+    const state = await this.ensureUserState(rawUserId);
+    return this.withLock(state, async () => {
+      const page = await this.getActivePage(state);
+      const currentUrl = page.url();
+      if (!currentUrl || currentUrl === "about:blank" || this.isHomeUrl(currentUrl)) {
+        throw new Error("Navigate to a webpage before exporting PDF");
+      }
+      const title = (await page.title().catch(() => "")) || "webpage";
+      const paperDims: Record<"Letter" | "A4" | "Legal", { paperWidth: number; paperHeight: number }> = {
+        Letter: { paperWidth: 8.5, paperHeight: 11 },
+        A4: { paperWidth: 8.27, paperHeight: 11.69 },
+        Legal: { paperWidth: 8.5, paperHeight: 14 },
+      };
+      const dims = paperDims[opts?.format || "Letter"];
+      const scale = Math.min(2, Math.max(0.1, opts?.scale ?? 1));
+      const cdp = await state.context!.newCDPSession(page);
+      let pdfBuf: Buffer;
+      try {
+        const res = (await cdp.send("Page.printToPDF", {
+          landscape: opts?.landscape === true,
+          printBackground: opts?.printBackground !== false,
+          paperWidth: dims.paperWidth,
+          paperHeight: dims.paperHeight,
+          scale,
+          preferCSSPageSize: false,
+        })) as { data: string };
+        pdfBuf = Buffer.from(res.data, "base64");
+      } finally {
+        await cdp.detach().catch(() => {});
+      }
+
+      let targetRel = (opts?.savePath || "").trim();
+      if (!targetRel) {
+        const slug =
+          title
+            .toLowerCase()
+            .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 60) || "webpage";
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        targetRel = `pdfs/${slug}-${stamp}.pdf`;
+      } else if (!targetRel.toLowerCase().endsWith(".pdf")) {
+        targetRel += ".pdf";
+      }
+
+      const resolved = await this.resolveWorkspacePathSafe(state.workspaceDir, targetRel);
+      await mkdir(path.dirname(resolved), { recursive: true });
+      await writeFile(resolved, pdfBuf);
+      return {
+        path: path.relative(state.workspaceDir, resolved) || targetRel,
+        bytes: pdfBuf.length,
+        url: this.displayUrl(currentUrl),
+        title,
+      };
+    });
   }
 }

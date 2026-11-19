@@ -5,10 +5,14 @@ import { type SandboxManager, sanitizeUserId } from "./sandbox.ts";
 
 export type ShareExpiryOption = "1d" | "1w" | "1m" | "forever";
 
+export type ShareMode = "file" | "app";
+
 export type ShareRecord = {
   id: string;
   userId: string;
   path: string;
+  mode?: ShareMode;
+  title?: string;
   createdAt: number;
   expiresAt: number | null;
   passwordSalt?: string;
@@ -19,6 +23,8 @@ export type ShareRecord = {
 export type PublicShareInfo = {
   id: string;
   path: string;
+  mode: ShareMode;
+  title?: string;
   url: string;
   createdAt: number;
   expiresAt: number | null;
@@ -78,6 +84,8 @@ export class ShareManager {
           id: rec.id,
           userId: sanitizeUserId(rec.userId),
           path: rec.path.replace(/^\/+/, ""),
+          mode: rec.mode === "app" ? "app" : "file",
+          title: typeof rec.title === "string" ? rec.title : undefined,
           createdAt: typeof rec.createdAt === "number" ? rec.createdAt : now,
           expiresAt: typeof rec.expiresAt === "number" ? rec.expiresAt : null,
           passwordSalt: typeof rec.passwordSalt === "string" ? rec.passwordSalt : undefined,
@@ -111,10 +119,14 @@ export class ShareManager {
   }
 
   toPublicInfo(rec: ShareRecord, publicOrigin: string): PublicShareInfo {
+    const mode: ShareMode = rec.mode === "app" ? "app" : "file";
+    const routePrefix = mode === "app" ? "app" : "s";
     return {
       id: rec.id,
       path: rec.path,
-      url: `${publicOrigin.replace(/\/+$/, "")}/s/${rec.id}`,
+      mode,
+      ...(rec.title ? { title: rec.title } : {}),
+      url: `${publicOrigin.replace(/\/+$/, "")}/${routePrefix}/${rec.id}`,
       createdAt: rec.createdAt,
       expiresAt: rec.expiresAt,
       hasPassword: Boolean(rec.passwordHash && rec.passwordSalt),
@@ -149,6 +161,8 @@ export class ShareManager {
   createOrUpdate(params: {
     userId: string;
     path: string;
+    mode?: ShareMode;
+    title?: string;
     expiresIn?: ShareExpiryOption;
     password?: string | null;
     keepExistingPassword?: boolean;
@@ -186,10 +200,15 @@ export class ShareManager {
       }
     }
 
+    const mode: ShareMode = params.mode || existing?.mode || "file";
+    const title = params.title?.trim() || existing?.title;
+
     const record: ShareRecord = {
       id,
       userId,
       path: normalizedPath,
+      mode,
+      ...(title ? { title } : {}),
       createdAt: existing?.createdAt ?? now,
       expiresAt,
       ...(passwordSalt && passwordHash ? { passwordSalt, passwordHash } : {}),
@@ -292,7 +311,13 @@ export function renderShareNotFoundPage(themeHead: string): Response {
   return new Response(html, { status: 404, headers: { "Content-Type": "text/html; charset=utf-8" } });
 }
 
-export function renderSharePasswordPage(themeHead: string, shareId: string, filename: string, error?: string): Response {
+export function renderSharePasswordPage(
+  themeHead: string,
+  shareId: string,
+  filename: string,
+  error?: string,
+  basePath = "/s",
+): Response {
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -304,17 +329,96 @@ export function renderSharePasswordPage(themeHead: string, shareId: string, file
 <body class="obx-center">
   <div class="obx-card">
     <h1>Password Protected</h1>
-    <p>Enter the password to view or download <strong>${escapeHtml(filename)}</strong>.</p>
+    <p>Enter the password to open <strong>${escapeHtml(filename)}</strong>.</p>
     ${error ? `<div class="obx-err">${escapeHtml(error)}</div>` : ""}
-    <form method="POST" action="/s/${encodeURIComponent(shareId)}">
+    <form method="POST" action="${basePath}/${encodeURIComponent(shareId)}">
       <label for="password">Password</label>
-      <input id="password" name="password" type="password" required autofocus placeholder="Enter share password" />
-      <button type="submit">Unlock File</button>
+      <input id="password" name="password" type="password" required autofocus placeholder="Enter password" />
+      <button type="submit">Unlock</button>
     </form>
   </div>
 </body>
 </html>`;
   return new Response(html, { status: error ? 401 : 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+}
+
+export function renderAppPlayerPage(params: {
+  themeHead: string;
+  rec: ShareRecord;
+  title: string;
+  htmlContent: string;
+}): Response {
+  const { themeHead, rec, title, htmlContent } = params;
+  const safeJsonHtml = JSON.stringify(htmlContent).replace(/<\/script>/gi, "<\\/script>");
+  const downloadUrl = `/app/${encodeURIComponent(rec.id)}/download`;
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>${escapeHtml(title)} · OpenBoxy</title>
+  ${themeHead}
+  <style>
+    html, body { margin: 0; padding: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex; flex-direction: column; background: var(--background); }
+    .app-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; background: var(--card); border-bottom: 1px solid var(--border); flex-shrink: 0; min-height: 38px; }
+    .app-title { font-size: 13px; font-weight: 700; color: var(--card-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .app-acts { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .app-btn { display: inline-flex; align-items: center; justify-content: center; padding: 4px 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--muted); color: var(--card-foreground); font-size: 12px; font-weight: 600; text-decoration: none; cursor: pointer; }
+    .app-btn:hover { opacity: 0.85; }
+    .app-stage { flex: 1; min-height: 0; position: relative; background: #000; }
+    #appFrame { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+    body.app-fs .app-bar { display: none; }
+    #appShowBarBtn { display: none; position: fixed; top: 8px; right: 8px; z-index: 9999; padding: 5px 9px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--card-foreground); font-size: 11.5px; font-weight: 600; opacity: 0.72; cursor: pointer; }
+    #appShowBarBtn:hover { opacity: 1; }
+    body.app-fs #appShowBarBtn { display: inline-flex; }
+  </style>
+</head>
+<body>
+  <header class="app-bar">
+    <div class="app-title">${escapeHtml(title)}</div>
+    <div class="app-acts">
+      <button type="button" class="app-btn" id="appFsBtn" title="Full Screen">Full Screen</button>
+      <a class="app-btn" href="${downloadUrl}">Download</a>
+    </div>
+  </header>
+  <button type="button" id="appShowBarBtn" title="Exit Full Screen">&#x2715; Exit</button>
+  <div class="app-stage">
+    <iframe
+      id="appFrame"
+      title="${escapeHtml(title)}"
+      sandbox="allow-scripts allow-pointer-lock allow-forms allow-modals allow-downloads"
+      allow="fullscreen; autoplay"
+    ></iframe>
+  </div>
+  <script>
+    const frame = document.getElementById("appFrame");
+    frame.srcdoc = ${safeJsonHtml};
+    const fsBtn = document.getElementById("appFsBtn");
+    const showBarBtn = document.getElementById("appShowBarBtn");
+    fsBtn.addEventListener("click", () => {
+      document.body.classList.add("app-fs");
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+    });
+    showBarBtn.addEventListener("click", () => {
+      document.body.classList.remove("app-fs");
+      if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
+    });
+    document.addEventListener("fullscreenchange", () => {
+      if (!document.fullscreenElement) document.body.classList.remove("app-fs");
+    });
+  </script>
+</body>
+</html>`;
+  return new Response(html, {
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "X-Frame-Options": "SAMEORIGIN",
+    },
+  });
 }
 
 export function renderShareViewerPage(params: {
@@ -403,28 +507,91 @@ export function renderShareViewerPage(params: {
       const shareTtsVoice = document.getElementById("shareTtsVoice");
       const shareTtsStatus = document.getElementById("shareTtsStatus");
 
+      function getSavedAudioSpeed() {
+        try {
+          const v = parseFloat(window.localStorage.getItem("openboxy-audio-speed") || "");
+          if (Number.isFinite(v) && v >= 0.5 && v <= 3) return v;
+        } catch {}
+        return 1;
+      }
+      function saveAudioSpeed(rate) {
+        try { window.localStorage.setItem("openboxy-audio-speed", String(rate)); } catch {}
+      }
+
       if (["html", "htm", "md", "txt"].includes(ext)) {
         shareListenBtn.style.display = "inline-flex";
+        let desiredRate = getSavedAudioSpeed();
+        function setSpeedUi(rate, persist = true) {
+          desiredRate = rate;
+          shareTtsAudio.playbackRate = rate;
+          if (persist) saveAudioSpeed(rate);
+          shareTtsSpeeds.querySelectorAll(".spd-btn").forEach((el) => {
+            el.classList.toggle("active", Number(el.dataset.rate) === rate);
+          });
+        }
         for (const r of [1, 1.25, 1.5, 2]) {
           const b = document.createElement("button");
           b.type = "button";
-          b.className = "spd-btn" + (r === 1 ? " active" : "");
+          b.dataset.rate = String(r);
+          b.className = "spd-btn" + (r === desiredRate ? " active" : "");
           b.textContent = r + "x";
-          b.onclick = () => {
-            shareTtsAudio.playbackRate = r;
-            shareTtsSpeeds.querySelectorAll(".spd-btn").forEach((el) => el.classList.remove("active"));
-            b.classList.add("active");
-          };
+          b.onclick = () => setSpeedUi(r, true);
           shareTtsSpeeds.appendChild(b);
         }
+        let autoplayBlocked = false;
+        let wantsAutoplay = false;
+        function unlockShareAutoplay() {
+          if (!wantsAutoplay || !shareTtsAudio.paused) return;
+          shareTtsAudio.playbackRate = desiredRate;
+          shareTtsAudio.play().then(() => {
+            autoplayBlocked = false;
+            wantsAutoplay = false;
+            shareTtsStatus.textContent = "";
+          }).catch(() => {});
+        }
+        document.addEventListener("pointerdown", unlockShareAutoplay, { passive: true });
+        document.addEventListener("keydown", unlockShareAutoplay);
+
         function startShareTts() {
           const v = shareTtsVoice.value || "auto";
+          autoplayBlocked = false;
+          wantsAutoplay = true;
           shareTtsStatus.textContent = "Generating audio…";
+          shareTtsAudio.autoplay = true;
+          shareTtsAudio.preload = "auto";
           shareTtsAudio.src = ttsBaseUrl + "?voice=" + encodeURIComponent(v);
-          shareTtsAudio.play().catch(() => {});
+          shareTtsAudio.playbackRate = desiredRate;
+          shareTtsAudio.load();
+          shareTtsAudio.play().then(() => {
+            wantsAutoplay = false;
+            autoplayBlocked = false;
+          }).catch(() => {
+            autoplayBlocked = true;
+          });
         }
-        shareTtsAudio.addEventListener("canplay", () => {
+        shareTtsAudio.addEventListener("loadedmetadata", () => {
+          shareTtsAudio.playbackRate = desiredRate;
+        });
+        shareTtsAudio.addEventListener("play", () => {
+          shareTtsAudio.playbackRate = desiredRate;
+          autoplayBlocked = false;
+          wantsAutoplay = false;
           shareTtsStatus.textContent = "";
+        });
+        shareTtsAudio.addEventListener("canplay", () => {
+          shareTtsAudio.playbackRate = desiredRate;
+          if (wantsAutoplay && shareTtsAudio.paused) {
+            shareTtsAudio.play().then(() => {
+              wantsAutoplay = false;
+              autoplayBlocked = false;
+              shareTtsStatus.textContent = "";
+            }).catch(() => {
+              autoplayBlocked = true;
+              shareTtsStatus.textContent = "Tap anywhere to play ▶";
+            });
+          } else {
+            shareTtsStatus.textContent = autoplayBlocked && shareTtsAudio.paused ? "Tap anywhere to play ▶" : "";
+          }
         });
         shareTtsAudio.addEventListener("error", () => {
           shareTtsStatus.textContent = "TTS failed";
@@ -443,6 +610,23 @@ export function renderShareViewerPage(params: {
             else shareTtsAudio.play().catch(() => {});
           }
         });
+
+        const params = new URLSearchParams(location.search);
+        const audioParam = params.get("audio");
+        if (audioParam !== null && audioParam !== "0" && audioParam.toLowerCase() !== "false") {
+          const voiceParam = params.get("voice");
+          if (voiceParam && Array.from(shareTtsVoice.options).some((o) => o.value === voiceParam)) {
+            shareTtsVoice.value = voiceParam;
+          }
+          if (/^\\d+(?:\\.\\d+)?x$/i.test(audioParam.trim())) {
+            const parsedRate = parseFloat(audioParam.replace(/x$/i, ""));
+            if (Number.isFinite(parsedRate) && parsedRate >= 0.5 && parsedRate <= 3) {
+              setSpeedUi(parsedRate, false);
+            }
+          }
+          shareTtsBar.style.display = "flex";
+          startShareTts();
+        }
       }
       const imgExts = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
       const audioExts = ["mp3", "m4a", "aac", "wav", "ogg", "opus", "flac"];
